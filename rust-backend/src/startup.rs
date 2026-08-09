@@ -2,12 +2,10 @@ use std::fs;
 use std::process::Command;
 use tracing::{info, warn, error};
 
-/// Application data directory. `ZFS_MANAGER_DATA` is honored as a fallback so
-/// existing deployments keep working after the rename to ZFS Dashboard.
+/// Application data directory. Hardcoded to `/app`; the entrypoint migrates
+/// data from legacy paths automatically so no env var is needed.
 pub fn data_dir() -> String {
-    std::env::var("ZFS_DASHBOARD_DATA")
-        .or_else(|_| std::env::var("ZFS_MANAGER_DATA"))
-        .unwrap_or_else(|_| "/home/docker/zfs-manager".to_string())
+    "/app".to_string()
 }
 
 /// Mount all ZFS datasets from already-imported pools so that the rshared /mnt

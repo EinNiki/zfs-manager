@@ -42,16 +42,17 @@ COPY --from=web-builder /app/dist /usr/share/zfs-dashboard/web
 COPY rust-backend/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Data directory (path kept from the ZFS Manager era for volume compatibility)
-RUN mkdir -p /home/docker/zfs-manager
+# Data directory is /app. The legacy paths are kept around only so the
+# entrypoint migration can detect and move old data on existing installations
+# that upgrade to this image.
+RUN mkdir -p /app /home/docker/zfs-manager /home/zfs-manager
 
 EXPOSE 3000
 
 ENV ZFS_API_PORT=3000
 ENV RUST_LOG=info
-ENV ZFS_DASHBOARD_DATA=/home/docker/zfs-manager
 ENV ZFS_STATIC_DIR=/usr/share/zfs-dashboard/web
 
-WORKDIR /home/docker/zfs-manager
+WORKDIR /app
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

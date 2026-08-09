@@ -1,48 +1,28 @@
-# ZFS Dashboard stack: one app container (API + frontend, served by Axum)
-# plus PostgreSQL and Redis as separate services.
-#
-# Postgres/Redis stay separate on purpose: they have their own lifecycle
-# (upgrades, backups), persistent state, and battle-tested official images.
-# Merging them into the app container would gain nothing and complicate
-# everything (init systems, signal handling, partial restarts).
-#
-# Copy .env.example to .env and adjust the passwords before first start.
-
 services:
   zfs-dashboard:
-    image: zfs-dashboard:local
-    build: .
+    image: ghcr.io/zfs-manager/zfs-manager:feature-module-system
     container_name: zfs-dashboard
     restart: unless-stopped
     stop_signal: SIGINT
-    # Required: ZFS tools inside the container talk to the host kernel module
-    # and block devices.
     privileged: true
     ports:
       - "${ZFS_WEB_PORT:-8080}:3000"
     environment:
       - ZFS_API_PORT=3000
       - RUST_LOG=info
-      - ZFS_DASHBOARD_DATA=/home/docker/zfs-manager
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       - REDIS_URL=redis://zfs-dashboard-redis:6379
       - DATABASE_URL=postgres://zfs:${POSTGRES_PASSWORD:-zfs_secret}@zfs-dashboard-postgres:5432/zfs_metrics
-      # Optional: base64-encoded 32-byte key for module secret encryption.
-      # Generated automatically into the data dir when unset.
       - ZFS_SECRETS_MASTER_KEY=${ZFS_SECRETS_MASTER_KEY:-}
     volumes:
       - /dev:/dev
       - /proc:/proc:ro
       - /sys/module/zfs:/sys/module/zfs:ro
       - /var/lib/zfs:/var/lib/zfs:ro
-      - type: bind
-        source: /mnt
-        target: /mnt
-        bind:
-          propagation: rshared
-      # Data dir path kept from the ZFS Manager era for upgrade compatibility.
-      - /home/docker/zfs-manager:/home/docker/zfs-manager
-    working_dir: /home/docker/zfs-manager
+      # Host data dir bind-mounted to /app inside the container.
+      # Host path kept as /home/zfs-manager for upgrade compatibility; the
+      # entrypoint migrates any leftover data from the old in-container path.
+      - /home/zfs-manager:/app
     healthcheck:
       test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/v1/health" ]
       interval: 15s
@@ -66,7 +46,7 @@ services:
       - POSTGRES_USER=zfs
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-zfs_secret}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - /home/zfs-dashboard/postgres:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U zfs -d zfs_metrics" ]
       interval: 5s
@@ -76,7 +56,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
     networks:
       - zfs-dashboard
 
@@ -85,7 +65,7 @@ services:
     container_name: zfs-dashboard-redis
     restart: unless-stopped
     volumes:
-      - redis_data:/data
+      - /home/zfs-dashboard/redis:/data
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
@@ -102,7 +82,3 @@ services:
 networks:
   zfs-dashboard:
     name: zfs-dashboard
-
-volumes:
-  redis_data:
-  postgres_data:
