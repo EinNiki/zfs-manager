@@ -13,7 +13,7 @@
 
 ## 🌟 Overview
 
-ZFS Dashboard (formerly ZFS Manager) is a completely reimagined, dark-themed control panel designed to bring enterprise-grade ZFS administration into a sleek, user-friendly interface. 
+ZFS Dashboard (formerly ZFS Dashboard) is a completely reimagined, dark-themed control panel designed to bring enterprise-grade ZFS administration into a sleek, user-friendly interface. 
 
 Built with a lightning-fast **Rust/Axum** backend and a dynamic **React + Tailwind** frontend, it provides real-time metrics, historical performance data, global notification rules, and complete control over your storage arrays.
 
@@ -120,8 +120,8 @@ Getting started is incredibly easy. The entire stack (Backend, Frontend, Postgre
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/ZFS-Manager/ZFS-Manager.git
-cd ZFS-Manager
+git clone https://github.com/ZFS-Dashboard/ZFS-Dashboard.git
+cd ZFS-Dashboard
 
 # 2. Configure secrets
 cp .env.example .env   # then edit the passwords
@@ -145,13 +145,13 @@ Environment variables are set via a `.env` file (see `.env.example`).
 | `POSTGRES_PASSWORD` | `zfs_secret` | Password for the PostgreSQL metrics database. |
 | `ZFS_WEB_PORT` | `8080` | Port the web UI + API is exposed on. |
 | `ZFS_SECRETS_MASTER_KEY` | *(auto)* | Base64 32-byte key for module secret encryption. Auto-generated into the data dir when unset. |
-| `ZFS_DASHBOARD_DATA` | `/home/docker/zfs-manager` | Data directory (falls back to the old `ZFS_MANAGER_DATA`). |
+| `ZFS_DASHBOARD_DATA` | `/home/docker/zfs-Dashboard` | Data directory (falls back to the old `ZFS_Dashboard_DATA`). |
 
 ---
 
 ## ⚠️ Important Notes & Limitations
 
-- **Product rename**: The project was renamed from **ZFS Manager** to **ZFS Dashboard**. `ZFS_*` environment variable prefixes are unchanged; `ZFS_MANAGER_DATA` is now `ZFS_DASHBOARD_DATA` (the old name still works as a fallback). The ZFS user property `zfsmanager:scrub_schedule` keeps its name so existing pools don't lose their scrub schedules.
+- **Product rename**: The project was renamed from **ZFS Dashboard** to **ZFS Dashboard**. `ZFS_*` environment variable prefixes are unchanged; `ZFS_Dashboard_DATA` is now `ZFS_DASHBOARD_DATA` (the old name still works as a fallback). The ZFS user property `zfsDashboard:scrub_schedule` keeps its name so existing pools don't lose their scrub schedules.
 - **Kernel Compatibility**: The container uses Alpine 3.20 (which ships ZFS 2.2.5). This provides the best compatibility for 2.2.x host kernels. If your host kernel module is 2.4.x, change `FROM alpine:3.20` to `FROM alpine:latest` in the root `Dockerfile`.
 - **Privileged Mode**: The app container runs as `privileged: true` and mounts host paths (`/dev`, `/proc`, `/sys/module/zfs`) so the ZFS utilities inside the container can interact with your host's kernel and block devices. Because of this, **module code is treated as fully untrusted** and runs in a WebAssembly sandbox — see [SECURITY.md](SECURITY.md).
 
