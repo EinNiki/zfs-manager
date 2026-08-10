@@ -127,9 +127,9 @@ export default function ModuleStore() {
       setErrors(store.errors);
       setRawStoreModules(store.modules);
 
-      if (forceRefresh) {
-        notify({ type: 'success', title: 'Module Store', message: 'Module Store Cache erfolgreich aktualisiert.', toastOnly: true });
-      }
+      // if (forceRefresh) {
+      //   notify({ type: 'success', title: 'Module Store', message: 'Module Store Cache erfolgreich aktualisiert.', toastOnly: true });
+      // }
 
       // Detect duplicate modules across registries
       const grouped = new Map<string, StoreModule[]>();

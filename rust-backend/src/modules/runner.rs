@@ -14,7 +14,7 @@ use crate::state::AppState;
 pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) -> Result<(i64, RunOutcome), String> {
     let pg = state.pg.as_ref().ok_or("database unavailable")?;
     let runtime = state.module_runtime.as_ref().ok_or("module runtime unavailable")?;
-    let master_key = state.master_key.ok_or("secrets master key unavailable")?;
+    let master_key = state.master_key;
 
     let row = pg
         .query_opt(
@@ -34,7 +34,7 @@ pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) ->
     let secrets_blob: Option<Vec<u8>> = row.get(3);
 
     let secret_values: HashMap<String, String> = match secrets_blob {
-        Some(blob) => secrets::decrypt_secrets(&master_key, &blob)?,
+        Some(blob) => secrets::decrypt_secrets(&master_key.ok_or("secrets master key unavailable")?, &blob)?,
         None => HashMap::new(),
     };
 

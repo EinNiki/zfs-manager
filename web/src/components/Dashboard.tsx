@@ -162,7 +162,7 @@ const TOOLTIP_STYLE = {
   labelStyle: { color: '#71717a', fontSize: 10 },
 };
 const AXIS_TICK   = { fill: '#52525b', fontSize: 10 };
-const GRID_PROPS  = { strokeDasharray: '1 6' as const, stroke: 'rgba(255,255,255,0.04)', vertical: false };
+const GRID_PROPS  = { strokeDasharray: '3 6' as const, stroke: 'rgba(255,255,255,0.15)', vertical: false };
 const CHART_MARGIN = { top: 24, right: 8, left: 16, bottom: 8 };
 const MAX_TICKS    = 6;
 
