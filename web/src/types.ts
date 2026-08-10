@@ -114,7 +114,7 @@ export interface StoreModule {
 export interface ModuleConfigField {
   key: string;
   label: string;
-  type: 'text' | 'url' | 'secret' | 'number' | 'select' | 'multiselect' | 'schedule';
+  type: 'text' | 'textarea' | 'url' | 'secret' | 'number' | 'select' | 'multiselect' | 'schedule';
   required?: boolean;
   default?: unknown;
   options?: string[];

@@ -104,7 +104,7 @@ pub struct ModuleAction {
 }
 
 const ALLOWED_FIELD_TYPES: &[&str] = &[
-    "text", "url", "secret", "number", "select", "multiselect", "schedule",
+    "text", "textarea", "url", "secret", "number", "select", "multiselect", "schedule",
 ];
 
 const ALLOWED_WIDGET_TYPES: &[&str] = &[

@@ -174,6 +174,7 @@ interface host-api {
     }
 
     http-fetch: func(url: string, headers: list<tuple<string, string>>) -> result<http-response, string>;
+    http-request: func(method: string, url: string, headers: list<tuple<string, string>>, body: option<string>) -> result<http-response, string>;
     db-write-metric: func(metric-name: string, value: f64) -> result<_, string>;
     get-secret: func(key: string) -> option<string>;
     log: func(level: string, message: string);
@@ -199,7 +200,8 @@ The module **imports** `host-api` (functions provided by the host) and **exports
 
 | Function | Description | Limits |
 |---|---|---|
-| `http-fetch(url, headers)` | GET request to an allowlisted URL. Returns `{ status, body }`. | Max 32 requests/run, 5 MiB response, no redirects, allowlist-enforced |
+| `http-fetch(url, headers)` | GET request to an allowlisted URL. Returns `{ status, body }`. | Max 32 requests/run (shared with `http-request`), 5 MiB response, no redirects, allowlist-enforced |
+| `http-request(method, url, headers, body)` | HTTP request with a custom method (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`) and optional body. Same allowlist and limits as `http-fetch`. Use this for pushing data to external services or sending webhook notifications. | Max 32 requests/run (shared with `http-fetch`), 5 MiB response, no redirects, allowlist-enforced |
 | `db-write-metric(name, value)` | Write a metric value (bound to this module's ID). | Max 1000/run, name 1-128 chars `[a-zA-Z0-9._-]` |
 | `get-secret(key)` | Read a decrypted secret the user configured. Returns `none` if unset. | Secrets never appear in `config_json` |
 | `log(level, message)` | Structured log line shown in run history. Level: `trace`, `debug`, `info`, `warn`, `error`. | Max 500 lines/run, 2048 bytes/line |
@@ -396,6 +398,7 @@ description = "Interval (e.g. 300, 15m, 2h) or cron expression (e.g. 0 0 * * * *
 | Type | Description |
 |---|---|
 | `text` | Plain text input |
+| `textarea` | Multi-line text input (monospace font, vertical resize) |
 | `url` | URL input — the host is automatically added to the network allowlist |
 | `secret` | Password input — AES-256-GCM encrypted in the database, delivered via `get-secret` |
 | `number` | Numeric input |

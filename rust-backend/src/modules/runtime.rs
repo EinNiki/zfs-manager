@@ -101,11 +101,14 @@ impl HostState {
     }
 }
 
-impl Host for HostState {
-    async fn http_fetch(
+impl HostState {
+    /// Shared request logic: allowlist + SSRF check, send, read response.
+    async fn do_request(
         &mut self,
+        method: reqwest::Method,
         url: String,
         headers: Vec<(String, String)>,
+        body: Option<String>,
     ) -> Result<HttpResponse, String> {
         self.http_requests += 1;
         if self.http_requests > MAX_HTTP_REQUESTS_PER_RUN {
@@ -114,25 +117,56 @@ impl Host for HostState {
         let parsed = net::check_allowlist(&url, &self.ctx.allowlist)?;
         net::reject_dangerous_ip(&parsed).await?;
 
-        let mut request = self.http.get(parsed);
+        let mut request = self.http.request(method, parsed);
         for (name, value) in headers {
             request = request.header(name.as_str(), value.as_str());
+        }
+        if let Some(body) = body {
+            request = request.body(body);
         }
         let response = request.send().await.map_err(|e| format!("request failed: {e}"))?;
         let status = response.status().as_u16();
 
-        let mut body = Vec::new();
+        let mut buf = Vec::new();
         let mut stream = response;
         while let Some(chunk) = stream.chunk().await.map_err(|e| e.to_string())? {
-            body.extend_from_slice(&chunk);
-            if body.len() > MAX_HTTP_RESPONSE_BYTES {
+            buf.extend_from_slice(&chunk);
+            if buf.len() > MAX_HTTP_RESPONSE_BYTES {
                 return Err(format!("response exceeds {MAX_HTTP_RESPONSE_BYTES} bytes"));
             }
         }
         Ok(HttpResponse {
             status,
-            body: String::from_utf8_lossy(&body).into_owned(),
+            body: String::from_utf8_lossy(&buf).into_owned(),
         })
+    }
+}
+
+impl Host for HostState {
+    async fn http_fetch(
+        &mut self,
+        url: String,
+        headers: Vec<(String, String)>,
+    ) -> Result<HttpResponse, String> {
+        self.do_request(reqwest::Method::GET, url, headers, None).await
+    }
+
+    async fn http_request(
+        &mut self,
+        method: String,
+        url: String,
+        headers: Vec<(String, String)>,
+        body: Option<String>,
+    ) -> Result<HttpResponse, String> {
+        let method = match method.to_ascii_uppercase().as_str() {
+            "GET" => reqwest::Method::GET,
+            "POST" => reqwest::Method::POST,
+            "PUT" => reqwest::Method::PUT,
+            "PATCH" => reqwest::Method::PATCH,
+            "DELETE" => reqwest::Method::DELETE,
+            other => return Err(format!("unsupported HTTP method: {other}")),
+        };
+        self.do_request(method, url, headers, body).await
     }
 
     async fn db_write_metric(&mut self, metric_name: String, value: f64) -> Result<(), String> {

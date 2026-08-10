@@ -8,9 +8,14 @@ interface host-api {
         body: string,
     }
 
-    /// Fetch a URL. The host enforces the module's domain allowlist; requests
-    /// to any other host are rejected.
+    /// Fetch a URL via GET. The host enforces the module's domain allowlist;
+    /// requests to any other host are rejected.
     http-fetch: func(url: string, headers: list<tuple<string, string>>) -> result<http-response, string>;
+
+    /// Send an HTTP request with a custom method and optional body. The host
+    /// enforces the same allowlist as http-fetch. `method` is one of: GET,
+    /// POST, PUT, PATCH, DELETE. `body` is none for bodyless requests.
+    http-request: func(method: string, url: string, headers: list<tuple<string, string>>, body: option<string>) -> result<http-response, string>;
 
     /// Write one metric value. The host binds the metric to the calling
     /// module — a module can never write metrics under another module's id.

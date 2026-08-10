@@ -111,7 +111,17 @@ export default function ModuleConfigForm({ module, onSave }: Props) {
         );
       }
       default:
-        // text | url | schedule
+        // text | textarea | url | schedule
+        if (field.type === 'textarea') {
+          return (
+            <textarea
+              style={{ ...inputStyle, height: 'auto', minHeight: 80, padding: '10px 12px', resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }}
+              placeholder={field.description || ''}
+              value={String(value ?? '')}
+              onChange={e => setValue(field.key, e.target.value)}
+            />
+          );
+        }
         return (
           <input
             style={inputStyle}
