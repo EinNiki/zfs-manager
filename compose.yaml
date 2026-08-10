@@ -1,6 +1,6 @@
 services:
   zfs-dashboard:
-    image: ghcr.io/zfs-manager/zfs-manager:feature-module-system
+    image: ghcr.io/zfs-dashboard/zfs-dashboard:feature-module-system
     container_name: zfs-dashboard
     restart: unless-stopped
     stop_signal: SIGINT
@@ -19,10 +19,7 @@ services:
       - /proc:/proc:ro
       - /sys/module/zfs:/sys/module/zfs:ro
       - /var/lib/zfs:/var/lib/zfs:ro
-      # Host data dir bind-mounted to /app inside the container.
-      # Host path kept as /home/zfs-manager for upgrade compatibility; the
-      # entrypoint migrates any leftover data from the old in-container path.
-      - /home/zfs-manager:/app
+      - /home/zfs-dashboard:/app
     healthcheck:
       test: [ "CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/v1/health" ]
       interval: 15s
