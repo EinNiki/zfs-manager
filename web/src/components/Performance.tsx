@@ -87,17 +87,16 @@ const CHART_MARGIN = { top: 24, right: 8, left: 16, bottom: 8 };
 
 const TOOLTIP_STYLE = {
   contentStyle: {
-    background: '#090d16', border: '1px solid #334155',
-    borderRadius: 6, padding: '8px 12px',
+    background: '#18181b', border: '1px solid #3f3f46',
+    borderRadius: 6, padding: '6px 10px',
     fontSize: 11, fontFamily: '"JetBrains Mono", monospace',
-    boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-    color: '#f8fafc',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
   },
-  labelStyle: { color: '#94a3b8', fontSize: 10, marginBottom: 4, fontWeight: 600 },
+  labelStyle: { color: '#71717a', fontSize: 10, marginBottom: 2 },
   itemStyle: { fontWeight: 600 },
 };
-const AXIS_TICK  = { fill: '#64748b', fontSize: 10 };
-const GRID_PROPS = { strokeDasharray: '3 3' as const, stroke: '#1e293b', vertical: false };
+const AXIS_TICK  = { fill: '#52525b', fontSize: 10 };
+const GRID_PROPS = { strokeDasharray: '3 6' as const, stroke: 'rgba(255,255,255,0.15)', vertical: false };
 
 function getBwScale(maxMB: number): { unit: string; fmt: (v: number) => string } {
   // 1 GB = 1024 MB, 1 TB = ~1.05e6 MB, 1 PB = ~1.07e9 MB, 1 EB = ~1.10e12 MB, 1 ZB = ~1.13e15 MB, 1 YB = ~1.16e18 MB
@@ -229,17 +228,11 @@ function Panel({ title, sub, right, children }: {
   title: string; sub?: string; right?: React.ReactNode; children: React.ReactNode;
 }) {
   return (
-    <div style={{
-      background: 'var(--bg-elevated)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-lg)',
-      boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-      overflow: 'hidden',
-    }}>
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
         <div>
-          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
-          {sub && <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
+          <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
+          {sub && <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
         </div>
         {right}
       </div>
@@ -255,10 +248,10 @@ function Toggle({ color, label, active, onClick }: { color: string; label: strin
       style={{
         display: 'flex', alignItems: 'center', gap: 5,
         height: 24, padding: '0 8px', borderRadius: 'var(--radius-sm)',
-        border: `1px solid ${active ? color : 'var(--border)'}`,
-        background: active ? 'var(--bg-hover)' : 'var(--bg-base)',
+        border: `1px solid ${active ? color + '44' : 'var(--border)'}`,
+        background: active ? color + '15' : 'transparent',
         color: active ? color : 'var(--text-muted)',
-        fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700,
+        fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 600,
         letterSpacing: '0.05em', textTransform: 'uppercase',
         cursor: 'pointer', transition: 'all 0.12s',
       }}
@@ -273,37 +266,20 @@ function GaugeCard({ label, value, unit, color, sub }: {
   label: string; value: string; unit: string; color: string; sub?: string;
 }) {
   return (
-    <div style={{
-      background: 'var(--bg-elevated)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-lg)',
-      padding: '16px',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'space-between',
-      height: 124,
-      boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-      position: 'relative',
-      overflow: 'hidden',
-      boxSizing: 'border-box',
-    }}>
-      {/* Glow line top */}
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: color }} />
-
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '14px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, marginBottom: 8 }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
+        <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
           {label}
         </span>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
       </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 26, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.1, letterSpacing: '-0.02em' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(20px, 4vw, 30px)', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1, letterSpacing: '-0.03em' }}>
           {value}
         </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, color }}>{unit}</span>
-          {sub && <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, color: 'var(--text-muted)' }}>{sub}</span>}
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 5, marginTop: 3 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color }}>{unit}</span>
+          {sub && <span style={{ fontFamily: 'var(--font-ui)', fontSize: 9, color: 'var(--text-muted)' }}>{sub}</span>}
         </div>
       </div>
     </div>
