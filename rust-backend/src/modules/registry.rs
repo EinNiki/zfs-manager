@@ -27,6 +27,7 @@ const MAX_INDEX_BYTES: usize = 1024 * 1024;
 pub struct RegistryEntry {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub version: String,
     #[serde(default)]
     pub author: String,

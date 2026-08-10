@@ -67,6 +67,48 @@ pub async fn configured_registries(state: &AppState) -> Result<Vec<(i32, String,
     Ok(registries)
 }
 
+/// Fetches the latest release tag from GitHub's releases/latest API.
+/// Returns an empty string on any failure (non-GitHub URL, network error, etc.).
+async fn fetch_latest_release_version(repository_url: &str) -> String {
+    let parsed = match reqwest::Url::parse(repository_url) {
+        Ok(u) => u,
+        Err(_) => return String::new(),
+    };
+    if parsed.host_str() != Some("github.com") {
+        return String::new();
+    }
+    let path_segments: Vec<&str> = parsed.path_segments().map(|c| c.collect()).unwrap_or_default();
+    if path_segments.len() < 2 {
+        return String::new();
+    }
+    let owner = path_segments[0];
+    let repo = path_segments[1].trim_end_matches(".git");
+
+    let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+    let client = match reqwest::Client::builder()
+        .user_agent("ZFS-Dashboard")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+
+    match client.get(&api_url).send().await {
+        Ok(r) if r.status().is_success() => {
+            let json: Value = match r.json().await {
+                Ok(j) => j,
+                Err(_) => return String::new(),
+            };
+            json.get("tag_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        }
+        _ => String::new(),
+    }
+}
+
 async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let pg = state.pg.as_ref().ok_or(ApiError::InternalError("database unavailable".into()))?;
     let installed_rows = pg
@@ -83,12 +125,32 @@ async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, Api
     for (_, url, _) in configured_registries(&state).await? {
         match registry::fetch_index(&url).await {
             Ok(index) => {
-                for module in index.modules {
+                // Fetch latest release versions from GitHub in parallel so the
+                // store listing reflects real upstream versions without needing
+                // a manually-maintained "version" field in index.json.
+                let repo_urls: Vec<String> = index
+                    .modules
+                    .iter()
+                    .map(|m| m.repository_url.clone())
+                    .collect();
+                let module_count = index.modules.len();
+                let mut join_set = tokio::task::JoinSet::new();
+                for repo_url in repo_urls {
+                    join_set.spawn(async move {
+                        fetch_latest_release_version(&repo_url).await
+                    });
+                }
+                let mut versions = Vec::with_capacity(module_count);
+                while let Some(res) = join_set.join_next().await {
+                    versions.push(res.unwrap_or_default());
+                }
+
+                for (module, latest_version) in index.modules.into_iter().zip(versions) {
                     let inst_ver = installed_map.get(&module.id).cloned();
                     entries.push(json!({
                         "id": module.id,
                         "name": module.name,
-                        "version": module.version,
+                        "version": latest_version,
                         "author": module.author,
                         "description": module.description,
                         "icon": module.icon,

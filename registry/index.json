@@ -3,7 +3,6 @@
     {
       "id": "immich",
       "name": "Immich Stats",
-      "version": "1.0.0",
       "author": "ZFS Dashboard",
       "description": "Collects statistics from an Immich server (photos, videos, storage usage, user count) and stores them as dashboard metrics.",
       "icon": "camera",
