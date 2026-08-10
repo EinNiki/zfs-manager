@@ -23,6 +23,10 @@ pub fn router(state: AppState) -> Router {
             get(list_registries).post(add_registry),
         )
         .route(
+            "/api/v1/modules/registries/discover",
+            post(discover_registry),
+        )
+        .route(
             "/api/v1/modules/registries/:id",
             axum::routing::delete(remove_registry),
         )
@@ -157,6 +161,128 @@ async fn list_registries(State(state): State<AppState>) -> Result<Json<Value>, A
         .map(|(id, url, is_default)| json!({ "id": id, "url": url, "is_default": is_default }))
         .collect();
     Ok(Json(json!({ "registries": registries })))
+}
+
+#[derive(Deserialize)]
+struct DiscoverRegistryBody {
+    url: String,
+}
+
+/// Given a URL (either a direct file URL or a repo URL), discovers candidate
+/// index.json / registry.json files and returns all that are valid.
+///
+/// For a direct file URL (ends with .json), it just validates that one.
+/// For a GitHub repo URL, it tries common locations:
+///   - main branch: index.json, registry/index.json, registry.json
+///   - master branch: same three (fallback)
+/// For any other URL that doesn't end in .json, it tries appending
+/// index.json and registry/index.json.
+async fn discover_registry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DiscoverRegistryBody>,
+) -> Result<Json<Value>, ApiError> {
+    mgmt_rate_limit(&state, &headers)?;
+    let input = body.url.trim().trim_end_matches('/').to_string();
+    if input.is_empty() {
+        return Err(ApiError::BadRequest("URL is required".into()));
+    }
+
+    let parsed = reqwest::Url::parse(&input)
+        .map_err(|e| ApiError::BadRequest(format!("invalid url: {e}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(ApiError::BadRequest("url must be http(s)".into()));
+    }
+
+    // Build candidate URLs
+    let candidates = build_candidate_urls(&input, &parsed);
+
+    // Fetch all candidates in parallel, keep only valid ones
+    let client = reqwest::Client::builder()
+        .user_agent("ZFS-Dashboard")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+    let mut join_set = tokio::task::JoinSet::new();
+    for url in &candidates {
+        let url = url.clone();
+        let client = client.clone();
+        join_set.spawn(async move {
+            let resp = client.get(&url).send().await;
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let text = r.text().await.unwrap_or_default();
+                    // Validate it's a proper registry index
+                    match serde_json::from_str::<Value>(&text) {
+                        Ok(v) if v.get("modules").and_then(|m| m.as_array()).is_some() => {
+                            Some((url, true))
+                        }
+                        _ => Some((url, false)),
+                    }
+                }
+                _ => Some((url, false)),
+            }
+        });
+    }
+
+    let mut found_valid: Vec<String> = Vec::new();
+    let mut found_invalid: Vec<String> = Vec::new();
+    while let Some(res) = join_set.join_next().await {
+        if let Ok(Some((url, is_valid))) = res {
+            if is_valid {
+                found_valid.push(url);
+            } else {
+                found_invalid.push(url);
+            }
+        }
+    }
+
+    // Sort for stable ordering
+    found_valid.sort();
+    found_invalid.sort();
+
+    Ok(Json(json!({
+        "input": input,
+        "candidates_checked": candidates.len(),
+        "found": found_valid,
+        "invalid": found_invalid,
+    })))
+}
+
+/// Builds a list of candidate index file URLs from the user input.
+fn build_candidate_urls(input: &str, parsed: &reqwest::Url) -> Vec<String> {
+    // If the URL already points to a .json file, just use it directly
+    if input.to_lowercase().ends_with(".json") {
+        return vec![input.to_string()];
+    }
+
+    // GitHub repo URL → try raw.githubusercontent.com with common paths
+    if parsed.host_str() == Some("github.com") {
+        let segments: Vec<&str> = parsed.path_segments().map(|c| c.collect()).unwrap_or_default();
+        if segments.len() >= 2 {
+            let owner = segments[0];
+            let repo = segments[1].trim_end_matches(".git");
+            let branches = ["main", "master"];
+            let paths = ["index.json", "registry/index.json", "registry.json"];
+            let mut urls = Vec::new();
+            for branch in &branches {
+                for path in &paths {
+                    urls.push(format!(
+                        "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+                    ));
+                }
+            }
+            return urls;
+        }
+    }
+
+    // Generic URL (not GitHub, not a .json file) → try appending common paths
+    vec![
+        format!("{input}/index.json"),
+        format!("{input}/registry/index.json"),
+        format!("{input}/registry.json"),
+    ]
 }
 
 #[derive(Deserialize)]

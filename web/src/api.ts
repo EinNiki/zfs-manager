@@ -294,6 +294,12 @@ export const api = {
       method: 'POST',
     }),
 
+  discoverRegistry: (url: string) =>
+    request<{ input: string; candidates_checked: number; found: string[]; invalid: string[] }>('/modules/registries/discover', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+
   // ── Pool Settings ──────────────────────────────────────────────────────────
   getPoolSettings: (name: string) =>
     request<{

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { Package, Plus, Trash2, Download, CheckCircle, AlertTriangle, RefreshCw, ArrowUpCircle, Search, Info } from 'lucide-react';
+import { Package, Plus, Trash2, Download, CheckCircle, AlertTriangle, RefreshCw, ArrowUpCircle, Search, Info, FileSearch, Loader2 } from 'lucide-react';
 import { api } from '../api';
 import { StoreModule } from '../types';
 import PageTransition from '../components/PageTransition';
@@ -76,6 +76,14 @@ export default function ModuleStore() {
   const [rawStoreModules, setRawStoreModules] = useState<StoreModule[]>([]);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [pendingAddRegistryUrl, setPendingAddRegistryUrl] = useState<string | null>(null);
+
+  // Registry Discovery State
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryResults, setDiscoveryResults] = useState<string[] | null>(null);
+  const [discoveryInput, setDiscoveryInput] = useState('');
+  const [showDiscoveryModal, setShowDiscoveryModal] = useState(false);
+  const [selectedDiscoveryUrl, setSelectedDiscoveryUrl] = useState('');
+  const [addingRegistry, setAddingRegistry] = useState(false);
 
   const filterAndSetModules = (rawMods: StoreModule[], selections: Record<string, string>) => {
     // Validate selections against currently available rawMods per module ID
@@ -283,10 +291,48 @@ export default function ModuleStore() {
     if (!url) return;
 
     if (registries.some(r => r.url === url)) {
-      notify({ type: 'warning', title: 'Module Store', message: 'Diese Registry-URL ist bereits in der Liste vorhanden.' });
+      notify({ type: 'warning', title: 'Module Store', message: 'This registry URL is already in the list.' });
       return;
     }
 
+    // If it's a direct .json file URL, skip discovery and add directly
+    if (url.toLowerCase().endsWith('.json')) {
+      await addRegistryDirect(url);
+      return;
+    }
+
+    // Otherwise, discover candidate index files
+    setDiscovering(true);
+    setDiscoveryInput(url);
+    try {
+      const res = await api.discoverRegistry(url);
+      if (res.found.length === 0) {
+        notify({
+          type: 'error',
+          title: 'Module Store',
+          message: `No valid registry index found. Checked ${res.candidates_checked} candidate locations.`,
+        });
+      } else if (res.found.length === 1) {
+        // Single match — show confirmation modal
+        setDiscoveryResults(res.found);
+        setSelectedDiscoveryUrl(res.found[0]);
+        setShowDiscoveryModal(true);
+      } else {
+        // Multiple matches — let user pick
+        setDiscoveryResults(res.found);
+        setSelectedDiscoveryUrl(res.found[0]);
+        setShowDiscoveryModal(true);
+      }
+    } catch (err) {
+      notify({ type: 'error', title: 'Module Store', message: `Discovery failed: ${(err as Error).message}` });
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  /// Adds a registry URL directly (for direct .json URLs or after discovery confirmation)
+  const addRegistryDirect = async (url: string) => {
+    setAddingRegistry(true);
     setLoading(true);
     try {
       // Preview candidate registry index to check for duplicates BEFORE adding to DB
@@ -296,7 +342,7 @@ export default function ModuleStore() {
       }
       const candidateData = await resp.json();
       if (!candidateData || !Array.isArray(candidateData.modules)) {
-        throw new Error('Ungültige Registry Index-Datei');
+        throw new Error('Invalid registry index file');
       }
 
       const candidateModules: StoreModule[] = candidateData.modules.map((m: any) => ({
@@ -341,14 +387,29 @@ export default function ModuleStore() {
         // No duplicates! Directly add registry URL to backend DB
         await api.addRegistry(url);
         setNewRegistryUrl('');
-        notify({ type: 'success', title: 'Module Store', message: 'Registry hinzugefügt' });
+        notify({ type: 'success', title: 'Module Store', message: 'Registry added' });
         await reload(false, true);
       }
     } catch (err) {
       notify({ type: 'error', title: 'Module Store', message: `Adding registry failed: ${(err as Error).message}` });
     } finally {
       setLoading(false);
+      setAddingRegistry(false);
     }
+  };
+
+  const confirmDiscoverySelection = async () => {
+    if (!selectedDiscoveryUrl) return;
+    setShowDiscoveryModal(false);
+    setDiscoveryResults(null);
+    await addRegistryDirect(selectedDiscoveryUrl);
+  };
+
+  const cancelDiscovery = () => {
+    setShowDiscoveryModal(false);
+    setDiscoveryResults(null);
+    setSelectedDiscoveryUrl('');
+    notify({ type: 'info', title: 'Module Store', message: 'Registry discovery cancelled.' });
   };
 
   const removeRegistry = async (id: number) => {
@@ -562,17 +623,105 @@ export default function ModuleStore() {
               <input
                 className="input"
                 style={{ flex: 1 }}
-                placeholder="https://example.com/my-registry/index.json"
+                placeholder="https://github.com/example/repo or https://example.com/registry/index.json"
                 value={newRegistryUrl}
                 onChange={e => setNewRegistryUrl(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addRegistry()}
               />
-              <button className="btn btn-primary" style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }} onClick={addRegistry}>
-                <Plus size={14} /> Add registry
+              <button
+                className="btn btn-primary"
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, opacity: discovering || addingRegistry ? 0.6 : 1 }}
+                onClick={addRegistry}
+                disabled={discovering || addingRegistry}
+              >
+                {discovering ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+                {discovering ? 'Searching…' : addingRegistry ? 'Adding…' : 'Add registry'}
               </button>
             </div>
+            <p style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+              You can enter a direct <code style={{ fontFamily: 'var(--font-mono)' }}>index.json</code> URL or just a GitHub repo URL — the dashboard will automatically search for the registry index file.
+            </p>
           </div>
         </div>
+
+        {/* Registry Discovery Modal */}
+        <AnimatePresence>
+          {showDiscoveryModal && discoveryResults && (
+            <Modal
+              title={discoveryResults.length > 1 ? 'Multiple Registry Index Files Found' : 'Registry Index Found'}
+              onClose={cancelDiscovery}
+              maxWidth={560}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <div style={{
+                  display: 'flex', gap: 14, padding: '14px 16px',
+                  background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)',
+                  borderRadius: 8,
+                }}>
+                  <FileSearch size={18} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 2 }} />
+                  <div>
+                    <p style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                      {discoveryResults.length > 1
+                        ? `Found ${discoveryResults.length} valid registry index files for "${discoveryInput}". Select which one to use:`
+                        : `Found a valid registry index file for "${discoveryInput}". Please confirm to add it:`}
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {discoveryResults.map(url => {
+                    const isSelected = selectedDiscoveryUrl === url;
+                    return (
+                      <div
+                        key={url}
+                        onClick={() => setSelectedDiscoveryUrl(url)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '12px 14px',
+                          background: isSelected ? 'var(--accent-dim)' : 'var(--bg-elevated)',
+                          border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                          borderRadius: 'var(--radius)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        <div style={{
+                          width: 18, height: 18, borderRadius: '50%',
+                          border: `2px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                          background: isSelected ? 'var(--accent)' : 'transparent',
+                          flexShrink: 0,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          {isSelected && <CheckCircle size={12} color="#fff" />}
+                        </div>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+                          {url}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ flex: 1 }}
+                    onClick={cancelDiscovery}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                    onClick={confirmDiscoverySelection}
+                  >
+                    <CheckCircle size={14} /> Confirm & Add
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )}
+        </AnimatePresence>
 
         {/* Duplicate Module Selection Modal */}
         <AnimatePresence>
