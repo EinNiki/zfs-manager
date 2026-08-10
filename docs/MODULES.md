@@ -2,7 +2,7 @@
 
 ZFS Dashboard can be extended with **modules** — community-buildable extensions that fetch external data (e.g. from other self-hosted services) and write it into the dashboard as metrics. Think Home Assistant + HACS, but for storage infrastructure.
 
-Modules are written in Rust, compiled to a **WebAssembly component**, and run **sandboxed** inside the backend. They are never native code, and the server never compiles module source — it only runs finished, checksum-verified `.wasm` artifacts.
+Modules are written in Rust, compiled to a **WebAssembly component**, and run **sandboxed** inside the backend. They are never native code, and the server never compiles module source — it only runs finished, checksum-verified `.wasm` artifacts downloaded from GitHub Releases.
 
 ---
 
@@ -11,19 +11,24 @@ Modules are written in Rust, compiled to a **WebAssembly component**, and run **
 - [How It Works](#how-it-works)
 - [Security Model](#security-model)
 - [Module Lifecycle](#module-lifecycle)
-- [Writing a Module](#writing-a-module)
+- [Writing a Module from Scratch](#writing-a-module-from-scratch)
   - [1. Project setup](#1-project-setup)
-  - [2. The WIT interface](#2-the-wit-interface)
+  - [2. The WIT interface (host API contract)](#2-the-wit-interface-host-api-contract)
   - [3. Implementing `run`](#3-implementing-run)
   - [4. The manifest (`module.toml`)](#4-the-manifest-moduletoml)
   - [5. Building to `wasm32-wasip2`](#5-building-to-wasm32-wasip2)
 - [Publishing](#publishing)
-  - [Option A: Registry](#option-a-registry)
-  - [Option B: Sideload](#option-b-sideload)
+  - [Registry index format](#registry-index-format)
+  - [Custom registries](#custom-registries)
+  - [Sideload (local/dev)](#sideload-localdev)
+- [Releases & GitHub Workflows](#releases--github-workflows)
+  - [How downloads work](#how-downloads-work)
+  - [Release workflow template](#release-workflow-template)
+  - [Creating a new release](#creating-a-new-release)
+  - [Updating the registry after a release](#updating-the-registry-after-a-release)
 - [Resource Limits](#resource-limits)
 - [API Reference](#api-reference)
 - [Database Schema](#database-schema)
-- [Example: Immich Stats Module](#example-immich-stats-module)
 
 ---
 
@@ -84,39 +89,58 @@ Modules run as **untrusted code** in a WebAssembly sandbox. The host enforces:
 
 ---
 
-## Writing a Module
+## Writing a Module from Scratch
 
 ### 1. Project setup
 
-Create a new Rust project:
+Create a new Rust project. It must be a **standalone crate** (not part of a workspace) because it targets `wasm32-wasip2`:
 
 ```bash
-cargo new immich-module --lib
-cd immich-module
+cargo new my-module --lib
+cd my-module
 ```
 
-Add the WIT bindings and wasmtime guest dependencies to `Cargo.toml`:
+Add the WIT bindings and serde dependencies to `Cargo.toml`:
 
 ```toml
+# Standalone crate (not part of a workspace) — it targets wasm32-wasip2.
+[workspace]
+
 [package]
-name = "immich-module"
-version = "1.0.0"
+name = "my-module"
+version = "0.1.0"
 edition = "2021"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.30"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+wit-bindgen = "=0.46.0"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
 ```
 
-Copy the WIT interface definition from this repo (`rust-backend/wit/module.wit`) into your module project at `wit/module.wit`. This defines the host API contract.
+The `cdylib` crate type produces a `.wasm` file. The `opt-level = "s"` + `lto` + `strip` settings keep the binary small.
 
-### 2. The WIT interface
+### 2. The WIT interface (host API contract)
 
-The full interface is defined in [`rust-backend/wit/module.wit`](../rust-backend/wit/module.wit):
+The module communicates with ZFS Dashboard through a **WIT interface** — a typed contract that defines what functions the host provides and what the module exports.
+
+Copy the WIT file from this repo into your module project:
+
+```
+my-module/
+└── wit/
+    └── module.wit    ← copy from rust-backend/wit/module.wit
+```
+
+The full interface:
 
 ```wit
 package zfs-dashboard:module@0.1.0;
@@ -149,9 +173,24 @@ world module {
 
 The module **imports** `host-api` (functions provided by the host) and **exports** a `run` function (the module's entry point).
 
+#### Host API functions
+
+| Function | Description | Limits |
+|---|---|---|
+| `http-fetch(url, headers)` | GET request to an allowlisted URL. Returns `{ status, body }`. | Max 32 requests/run, 5 MiB response, no redirects, allowlist-enforced |
+| `db-write-metric(name, value)` | Write a metric value (bound to this module's ID). | Max 1000/run, name 1-128 chars `[a-zA-Z0-9._-]` |
+| `get-secret(key)` | Read a decrypted secret the user configured. Returns `none` if unset. | Secrets never appear in `config_json` |
+| `log(level, message)` | Structured log line shown in run history. Level: `trace`, `debug`, `info`, `warn`, `error`. | Max 500 lines/run, 2048 bytes/line |
+
+#### Module export
+
+| Export | Description |
+|---|---|
+| `run(config-json) -> run-result` | Entry point. Called on every scheduled or manual run. `config-json` is the user's config as a JSON string (secrets excluded). Returns `{ success, message, metrics_written, error }`. |
+
 ### 3. Implementing `run`
 
-Generate the bindings and implement the `run` export. Here is the real implementation from the [immich-module](https://github.com/ZFS-Dashboard/immich-module) repo:
+Generate the WIT bindings and implement the `run` export:
 
 ```rust
 // src/lib.rs
@@ -164,40 +203,38 @@ wit_bindgen::generate!({
 use serde::Deserialize;
 use zfs_dashboard::module::host_api as host;
 
+/// Config fields the user fills in via the auto-generated form.
+/// These match the `config_schema` entries in your module.toml.
 #[derive(Deserialize)]
 struct Config {
-    immich_url: String,
+    service_url: String,
     #[serde(default)]
-    immich_api_key: String,
-    #[serde(default = "default_stats")]
-    stats_to_fetch: Vec<String>,
+    api_key: String,
+    #[serde(default = "default_metrics")]
+    metrics_to_collect: Vec<String>,
 }
 
-fn default_stats() -> Vec<String> {
-    vec!["photos".into(), "videos".into(), "usage".into(), "users".into()]
+fn default_metrics() -> Vec<String> {
+    vec!["items".into(), "users".into()]
 }
 
-/// Shape of Immich's GET /api/server/statistics response (fields we use).
+/// Example: parse the API response from your external service.
 #[derive(Deserialize)]
-struct ServerStatistics {
+struct ServiceStats {
     #[serde(default)]
-    photos: f64,
+    items: f64,
     #[serde(default)]
-    videos: f64,
-    #[serde(default)]
-    usage: f64,
-    #[serde(default, rename = "usageByUser")]
-    usage_by_user: Vec<serde_json::Value>,
+    users: f64,
 }
 
-struct ImmichModule;
+struct MyModule;
 
-impl Guest for ImmichModule {
+impl Guest for MyModule {
     fn run(config_json: String) -> RunResult {
         match collect(&config_json) {
             Ok(written) => RunResult {
                 success: true,
-                message: format!("collected {written} Immich metrics"),
+                message: format!("collected {written} metrics"),
                 metrics_written: written,
                 error: None,
             },
@@ -218,81 +255,86 @@ fn collect(config_json: &str) -> Result<u32, String> {
     let config: Config =
         serde_json::from_str(config_json).map_err(|e| format!("invalid config: {e}"))?;
 
-    let base = config.immich_url.trim_end_matches('/');
+    let base = config.service_url.trim_end_matches('/');
     if base.is_empty() {
-        host::log("info", "Immich URL is not configured. Skipping run.");
+        host::log("info", "Service URL not configured. Skipping run.");
         return Ok(0);
     }
 
-    let api_key = config.immich_api_key;
-    if api_key.is_empty() {
-        host::log("info", "Immich API key is not configured. Skipping run.");
-        return Ok(0);
-    }
-
-    let url = format!("{base}/api/server/statistics");
+    let url = format!("{base}/api/stats");
     host::log("info", &format!("fetching {url}"));
 
-    let response = host::http_fetch(&url, &[("x-api-key".to_string(), api_key)])?;
+    let headers = if config.api_key.is_empty() {
+        vec![]
+    } else {
+        vec![("authorization".to_string(), format!("Bearer {}", config.api_key))]
+    };
+
+    let response = host::http_fetch(&url, &headers)?;
     if response.status != 200 {
-        return Err(format!("Immich returned HTTP {}", response.status));
+        return Err(format!("service returned HTTP {}", response.status));
     }
-    let stats: ServerStatistics =
+
+    let stats: ServiceStats =
         serde_json::from_str(&response.body).map_err(|e| format!("unexpected response: {e}"))?;
 
     let mut written = 0u32;
-    for stat in &config.stats_to_fetch {
-        let (metric, value) = match stat.as_str() {
-            "photos" => ("immich.photos", stats.photos),
-            "videos" => ("immich.videos", stats.videos),
-            "usage" => ("immich.usage_bytes", stats.usage),
-            "users" => ("immich.users", stats.usage_by_user.len() as f64),
+    for metric in &config.metrics_to_collect {
+        let (name, value) = match metric.as_str() {
+            "items" => ("my-module.items", stats.items),
+            "users" => ("my-module.users", stats.users),
             other => {
-                host::log("warn", &format!("unknown stat {other:?} — skipping"));
+                host::log("warn", &format!("unknown metric {other:?} — skipping"));
                 continue;
             }
         };
-        host::db_write_metric(metric, value)?;
+        host::db_write_metric(name, value)?;
         written += 1;
     }
     Ok(written)
 }
 
-export!(ImmichModule);
+export!(MyModule);
 ```
+
+Key points:
+- `config_json` contains **non-secret** config values only. Secrets come via `get-secret`.
+- Use `host::log` for logging — it appears in the run history in the UI.
+- Metric names should be namespaced (e.g. `my-module.items`) to avoid collisions.
+- Return a `RunResult` with `success: false` and an `error` message on failure.
 
 ### 4. The manifest (`module.toml`)
 
-Every module needs a `module.toml` manifest that declares its identity, permissions, config form, and widgets. Here is the real manifest from the immich-module:
+Every module needs a `module.toml` manifest that declares its identity, permissions, config form, and widgets:
 
 ```toml
-id = "immich"
-name = "Immich Stats"
-wasm_entrypoint = "immich.wasm"
+id = "my-module"
+name = "My Module"
+wasm_entrypoint = "my-module.wasm"
 
 [permissions]
 network_allowlist = []
 
 [[config_schema]]
-key = "immich_url"
-label = "Immich URL"
+key = "service_url"
+label = "Service URL"
 type = "url"
 required = true
-description = "Base URL of your Immich server, e.g. http://immich.local:2283"
+description = "Base URL of the service to collect metrics from"
 
 [[config_schema]]
-key = "immich_api_key"
-label = "Immich API Key"
+key = "api_key"
+label = "API Key"
 type = "text"
-required = true
-description = "API key created in Immich under Account Settings > API Keys"
+required = false
+description = "Bearer token for authentication"
 
 [[config_schema]]
-key = "stats_to_fetch"
-label = "Statistics to collect"
+key = "metrics_to_collect"
+label = "Metrics to collect"
 type = "multiselect"
-options = ["photos", "videos", "usage", "users"]
-default = ["photos", "videos", "usage", "users"]
+options = ["items", "users"]
+default = ["items", "users"]
 description = "Which metrics to write on every run"
 
 [[config_schema]]
@@ -301,37 +343,6 @@ label = "Schedule"
 type = "schedule"
 default = "15m"
 description = "Interval (e.g. 300, 15m, 2h) or cron expression (e.g. 0 0 * * * *)"
-```
-
-A more complex module might also declare widgets, status fields, and actions:
-
-```toml
-[[widget_schema]]
-key = "photos"
-label = "Photos"
-type = "stat"
-metrics = ["immich.photos"]
-unit = "items"
-
-[[widget_schema]]
-key = "storage_chart"
-label = "Storage Usage"
-type = "line"
-metrics = ["immich.usage_bytes"]
-unit = "bytes"
-color = "#22c55e"
-
-[[status_fields]]
-key = "last_photos"
-label = "Photos"
-metric = "immich.photos"
-unit = "items"
-
-[[actions]]
-key = "refresh"
-label = "Refresh Now"
-icon = "refresh-cw"
-description = "Trigger an immediate data collection run"
 ```
 
 #### Manifest fields
@@ -345,7 +356,7 @@ description = "Trigger an immediate data collection run"
 | `description` | string | no | Short description shown in the Store. |
 | `icon` | string | no | Lucide icon name (e.g. `camera`, `database`, `cpu`). |
 | `repository_url` | string | no | GitHub repository URL. Used for release listing and version switching. |
-| `wasm_entrypoint` | string | yes | Filename of the `.wasm` artifact (e.g. `immich.wasm`). Must end with `.wasm`, no path separators. |
+| `wasm_entrypoint` | string | yes | Filename of the `.wasm` artifact (e.g. `my-module.wasm`). Must end with `.wasm`, no path separators. |
 | `permissions` | table | no | Network permissions. |
 | `config_schema` | array | no | Config form field definitions. |
 | `widget_schema` | array | no | Dashboard widget definitions. |
@@ -380,50 +391,72 @@ description = "Trigger an immediate data collection run"
 | `gauge` | Gauge indicator |
 | `table` | Tabular data |
 
+Example with widgets, status fields, and actions:
+
+```toml
+[[widget_schema]]
+key = "items_chart"
+label = "Items Over Time"
+type = "line"
+metrics = ["my-module.items"]
+unit = "items"
+color = "#22c55e"
+
+[[status_fields]]
+key = "current_items"
+label = "Items"
+metric = "my-module.items"
+unit = "items"
+
+[[actions]]
+key = "refresh"
+label = "Refresh Now"
+icon = "refresh-cw"
+description = "Trigger an immediate data collection run"
+```
+
 ### 5. Building to `wasm32-wasip2`
 
 Modules must be compiled as WebAssembly components targeting `wasm32-wasip2`:
 
 ```bash
-# Add the target
+# Add the target (one-time)
 rustup target add wasm32-wasip2
 
 # Build
-cargo build --target wasm32-wasip2 --release
+cargo build --release --target wasm32-wasip2
 
 # The output is at:
-# target/wasm32-wasip2/release/immich_module.wasm
+# target/wasm32-wasip2/release/my_module.wasm
 ```
 
 Rename the output to match your `wasm_entrypoint`:
 
 ```bash
-cp target/wasm32-wasip2/release/immich_module.wasm immich.wasm
+cp target/wasm32-wasip2/release/my_module.wasm my-module.wasm
 ```
 
 ---
 
 ## Publishing
 
-### Option A: Registry
+### Registry index format
 
-A registry is an `index.json` file hosted at a public URL. The default registry ships at [`registry/index.json`](../registry/index.json) in this repo.
-
-#### `index.json` format
+A registry is an `index.json` file hosted at a public URL. The default registry ships at [`registry/index.json`](../registry/index.json) in this repo and is served via GitHub raw content.
 
 ```json
 {
   "modules": [
     {
-      "id": "immich",
-      "name": "Immich Stats",
-      "author": "ZFS Dashboard",
-      "description": "Collects statistics from an Immich server.",
-      "icon": "camera",
-      "repository_url": "https://github.com/ZFS-Dashboard/immich-module",
-      "manifest_url": "https://raw.githubusercontent.com/ZFS-Dashboard/immich-module/main/module.toml",
-      "wasm_url": "https://github.com/ZFS-Dashboard/immich-module/releases/latest/download/immich.wasm",
-      "wasm_sha256": "1d1a2fbf0b774bb011dc891bd309012bbc787130327eb22436a42136eebf756d"
+      "id": "my-module",
+      "name": "My Module",
+      "author": "Your Name",
+      "description": "Collects metrics from an external service.",
+      "icon": "database",
+      "repository_url": "https://github.com/your-name/my-module",
+      "manifest_url": "https://raw.githubusercontent.com/your-name/my-module/main/module.toml",
+      "wasm_url": "https://github.com/your-name/my-module/releases/latest/download/my-module.wasm",
+      "wasm_sha256": "a1b2c3d4e5f6..."
     }
   ]
 }
@@ -435,27 +468,18 @@ A registry is an `index.json` file hosted at a public URL. The default registry 
 |---|---|
 | `id` | Must match the `id` in `module.toml`. |
 | `name`, `author`, `description`, `icon` | Display metadata (can differ from manifest). |
-| `repository_url` | GitHub repo URL. Used for release listing and version switching. |
-| `manifest_url` | Direct URL to the `module.toml` file. |
-| `wasm_url` | Direct URL to the `.wasm` artifact. Use `releases/latest/download/...` for the latest release. |
+| `repository_url` | GitHub repo URL. Used for release listing and version switching in the Store UI. |
+| `manifest_url` | Direct URL to the `module.toml` file (usually on `main` branch via `raw.githubusercontent.com`). |
+| `wasm_url` | Direct URL to the `.wasm` artifact. Use `releases/latest/download/<name>.wasm` for the latest release. |
 | `wasm_sha256` | SHA-256 hash of the `.wasm` file (64 hex chars). Verified on install. |
 
-> **Note:** The `version` field is **not** needed in `index.json`. The store listing fetches the latest version from the GitHub releases API (`releases/latest`) at runtime.
+> **Note:** The `version` field is **not** needed in `index.json`. The store listing fetches the latest version from the GitHub releases API (`releases/latest`) at runtime — see [How downloads work](#how-downloads-work).
 
-#### Steps to publish
-
-1. Create a GitHub repository for your module (e.g. `ZFS-Dashboard/immich-module`).
-2. Push your `module.toml` and source code to the `main` branch.
-3. Create a GitHub Release with the `.wasm` file as an asset.
-4. Compute the SHA-256: `sha256sum immich.wasm`
-5. Add an entry to the registry `index.json` (or your custom registry) with the URLs and checksum.
-6. The `manifest_url` should point to `module.toml` on `main`, and `wasm_url` to `releases/latest/download/immich.wasm`.
-
-#### Custom registries
+### Custom registries
 
 Users can add custom registry URLs in the Module Store UI. A custom registry is just another `index.json` at any HTTPS URL. The backend fetches all configured registries and merges their modules (with duplicate resolution in the UI).
 
-### Option B: Sideload
+### Sideload (local/dev)
 
 For local development or private modules, you can upload a `.wasm` directly without a registry:
 
@@ -476,9 +500,146 @@ Sideloaded modules have `source = "sideload"` and no `registry_url`. They cannot
 
 ---
 
+## Releases & GitHub Workflows
+
+### How downloads work
+
+When a user installs a module from the Store, the backend:
+
+1. Fetches the registry `index.json` to find the module entry.
+2. Downloads the `.wasm` from the `wasm_url` — which typically points to `https://github.com/<owner>/<repo>/releases/latest/download/<name>.wasm`. This URL always serves the **latest** GitHub Release asset.
+3. Downloads the `module.toml` from the `manifest_url` to get the current manifest (config schema, permissions, etc.).
+4. Verifies the SHA-256 checksum of the downloaded `.wasm` against `wasm_sha256` in `index.json`.
+5. Stores the `.wasm` on disk and inserts the module into the database.
+
+For **version switching** (updating to a specific older release), the Store UI fetches all releases via the GitHub API (`GET /api.github.com/repos/<owner>/<repo>/releases`) and lets the user pick. The selected release's `browser_download_url` is used to download that specific `.wasm` version.
+
+This means:
+- **The latest release** is always what new installs get (via `releases/latest/download/...`).
+- **Specific versions** are available via the version picker (which queries the GitHub Releases API).
+- **The `wasm_sha256` in `index.json`** must match the **latest** release's `.wasm` — update it whenever you cut a new release.
+- **The version shown in the Store** is fetched live from `releases/latest` — no `version` field in `index.json` needed.
+
+### Release workflow template
+
+Create `.github/workflows/release.yml` in your module repo. This workflow builds the `.wasm` on every push to `main` and creates a GitHub Release with the artifact attached:
+
+```yaml
+name: Release Module
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install wasm32-wasip2 target
+        run: rustup target add wasm32-wasip2
+
+      - name: Build WASM module
+        run: cargo build --release --target wasm32-wasip2
+
+      - name: Create GitHub Release & attach WASM artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: "v0.1.${{ github.run_number }}"
+        run: |
+          # Rename to match wasm_entrypoint in module.toml
+          cp target/wasm32-wasip2/release/my_module.wasm my-module.wasm
+
+          # Create the release with the .wasm attached
+          gh release create "$TAG" my-module.wasm \
+            --title "$TAG" \
+            --notes "Release $TAG (commit ${{ github.sha }})"
+```
+
+**Important:** Adjust the `cp` line to match your crate name and `wasm_entrypoint`:
+- Crate name in `Cargo.toml`: `my-module` → output file: `my_module.wasm` (hyphens become underscores)
+- `wasm_entrypoint` in `module.toml`: `my-module.wasm` (the name you want)
+
+### Creating a new release
+
+The workflow above triggers automatically on every push to `main`. Each push creates a new release tagged `v0.1.<run_number>` (e.g. `v0.1.42`). The `.wasm` artifact is attached to the release.
+
+If you prefer **manual versioning** (e.g. `v1.0.0`, `v1.1.0`), use this variant:
+
+```yaml
+name: Release Module
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install wasm32-wasip2 target
+        run: rustup target add wasm32-wasip2
+
+      - name: Build WASM module
+        run: cargo build --release --target wasm32-wasip2
+
+      - name: Create GitHub Release & attach WASM artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp target/wasm32-wasip2/release/my_module.wasm my-module.wasm
+          gh release create "${{ github.ref_name }}" my-module.wasm \
+            --title "${{ github.ref_name }}" \
+            --notes "Release ${{ github.ref_name }}"
+```
+
+With this variant, you create releases manually:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+# → workflow triggers, builds, and creates the release
+```
+
+### Updating the registry after a release
+
+After a new release is built, you need to update `wasm_sha256` in the registry `index.json` so the checksum matches the new artifact:
+
+```bash
+# Download the new artifact from the release
+gh release download v1.0.0 --repo your-name/my-module --output my-module.wasm
+
+# Compute the SHA-256
+sha256sum my-module.wasm
+# → a1b2c3d4e5f6...  (64 hex chars)
+
+# Update registry/index.json in the ZFS-Dashboard repo:
+#   "wasm_sha256": "a1b2c3d4e5f6..."
+```
+
+The `wasm_url` does **not** need updating — `releases/latest/download/my-module.wasm` always points to the newest release automatically.
+
+You can automate this with a workflow that updates the registry after a successful release, or do it manually. The key point: **`wasm_sha256` in `index.json` must always match the latest release's `.wasm`**, otherwise new installs will fail the checksum verification.
+
+---
+
 ## Resource Limits
 
-Per-run limits, configurable via environment variables:
+Per-run limits, configurable via environment variables on the ZFS Dashboard backend:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -568,7 +729,7 @@ CREATE TABLE module_registries (
 
 -- Installed modules
 CREATE TABLE modules (
-    id TEXT PRIMARY KEY,          -- manifest id, e.g. "immich"
+    id TEXT PRIMARY KEY,          -- manifest id, e.g. "my-module"
     name TEXT NOT NULL,
     version TEXT NOT NULL,
     author TEXT NOT NULL DEFAULT '',
@@ -622,103 +783,3 @@ CREATE TABLE module_audit_log (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
-
----
-
-## Example: Immich Stats Module
-
-The [immich-module](https://github.com/ZFS-Dashboard/immich-module) is the reference module — it doubles as the authoring template. It collects statistics from an [Immich](https://immich.app) server and writes them as dashboard metrics.
-
-### What it does
-
-Every scheduled run it calls `GET /api/server/statistics` on the configured Immich server and writes the selected metrics:
-
-| Metric | Meaning |
-|---|---|
-| `immich.photos` | Total number of photos |
-| `immich.videos` | Total number of videos |
-| `immich.usage_bytes` | Storage used by Immich |
-| `immich.users` | Number of users |
-
-### Configuration
-
-| Field | Type | Description |
-|---|---|---|
-| `immich_url` | url | Base URL, e.g. `http://immich.local:2283` |
-| `immich_api_key` | text | API key from Immich Account Settings → API Keys |
-| `stats_to_fetch` | multiselect | Which of the metrics to write (photos, videos, usage, users) |
-| `schedule` | schedule | Interval (`300`, `15m`, `2h`) or cron (`0 0 * * * *`) |
-
-### Repository layout
-
-```
-immich-module/
-├── Cargo.toml        # crate-type = ["cdylib"], dep: wit-bindgen
-├── module.toml       # manifest: identity, permissions, config schema
-├── wit/module.wit    # copy of the host interface (see rust-backend/wit/)
-└── src/lib.rs        # module logic
-```
-
-### Cargo.toml
-
-```toml
-[workspace]
-
-[package]
-name = "zfs-dashboard-module-immich"
-version = "1.0.0"
-edition = "2021"
-publish = false
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-wit-bindgen = "=0.46.0"
-serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.145"
-
-[profile.release]
-opt-level = "s"
-lto = true
-strip = true
-```
-
-### Source code
-
-The full `src/lib.rs` is shown in [Section 3: Implementing `run`](#3-implementing-run) above. The key flow is:
-
-1. Parse `config_json` to get the Immich URL, API key, and which stats to fetch.
-2. Call `http_fetch` with the `x-api-key` header to `GET /api/server/statistics`.
-3. Parse the JSON response and write each selected metric via `db_write_metric`.
-4. Return a `RunResult` with success/failure and the number of metrics written.
-
-### Building
-
-```bash
-rustup target add wasm32-wasip2
-cargo build --release --target wasm32-wasip2
-# → target/wasm32-wasip2/release/zfs_dashboard_module_immich.wasm
-```
-
-Rename to match `wasm_entrypoint`:
-
-```bash
-cp target/wasm32-wasip2/release/zfs_dashboard_module_immich.wasm immich.wasm
-```
-
-### Publishing
-
-The immich-module is published via GitHub Releases. The registry entry in [`registry/index.json`](../registry/index.json) points to:
-
-- `manifest_url` → `module.toml` on the `main` branch
-- `wasm_url` → `releases/latest/download/immich.wasm` (always the latest release)
-- `wasm_sha256` → SHA-256 of the current release artifact
-
-To create a new release:
-
-1. Tag a new version: `git tag v1.1.0 && git push origin v1.1.0`
-2. Create a GitHub Release and attach the built `immich.wasm`.
-3. Update `wasm_sha256` in `registry/index.json` with the new checksum (`sha256sum immich.wasm`).
-
-The version shown in the Store UI is fetched live from the GitHub releases API — no `version` field in `index.json` needed.
