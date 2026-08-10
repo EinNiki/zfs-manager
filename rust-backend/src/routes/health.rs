@@ -3,7 +3,9 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 pub fn router() -> Router {
-    Router::new().route("/api/v1/health", get(health))
+    Router::new()
+        .route("/api/v1/health", get(health))
+        .route("/api/v1/health/latest-release", get(latest_release))
 }
 
 async fn run_git_cmd(args: &[&str]) -> Option<String> {
@@ -82,4 +84,32 @@ async fn health() -> Json<Value> {
             "upstream_status": upstream_status,
         }
     }))
+}
+
+/// Proxies the GitHub releases/latest API call through the backend so that
+/// the GitHub rate limit (60 req/hour per IP for unauthenticated requests)
+/// is shared across all users of this server instead of per-browser-IP.
+async fn latest_release() -> Json<Value> {
+    let client = match reqwest::Client::builder()
+        .user_agent("ZFS-Dashboard")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Json(json!({ "tag_name": "" })),
+    };
+
+    match client
+        .get("https://api.github.com/repos/ZFS-Dashboard/ZFS-Dashboard/releases/latest")
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            let json: Value = r.json().await.unwrap_or(json!({}));
+            Json(json!({
+                "tag_name": json.get("tag_name").and_then(|v| v.as_str()).unwrap_or(""),
+            }))
+        }
+        _ => Json(json!({ "tag_name": "" })),
+    }
 }

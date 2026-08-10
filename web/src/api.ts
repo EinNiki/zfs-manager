@@ -286,6 +286,9 @@ export const api = {
 
   getHealth: () => request<any>('/health'),
 
+  getLatestRelease: () =>
+    request<{ tag_name: string }>('/health/latest-release'),
+
   // ── Pool Settings ──────────────────────────────────────────────────────────
   getPoolSettings: (name: string) =>
     request<{

@@ -64,8 +64,7 @@ export default function Sidebar({
   };
 
   useEffect(() => {
-    fetch('https://api.github.com/repos/ZFS-Dashboard/ZFS-Dashboard/releases/latest')
-      .then(r => r.json())
+    api.getLatestRelease()
       .then(d => { if (d?.tag_name) setGithubVersion(d.tag_name); })
       .catch(() => {});
 
