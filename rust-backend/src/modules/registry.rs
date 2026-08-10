@@ -5,7 +5,7 @@ use tracing::warn;
 use super::manifest::{Manifest, MAX_MANIFEST_BYTES, MAX_WASM_BYTES};
 
 pub const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/ZFS-Dashboard/ZFS-Dashboard/main/registry/index.json";
+    "https://raw.githubusercontent.com/ZFS-Dashboard/ZFS-Dashboard/refs/heads/main/registry/index.json";
 
 pub fn default_registry_url() -> String {
     let raw = match std::env::var("MODULE_REGISTRY_URL") {
