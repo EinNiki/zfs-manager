@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -9,12 +9,14 @@ use serde_json::{json, Value};
 
 use crate::error::ApiError;
 use crate::modules::audit::{actor_from_headers, audit};
+use crate::modules::github_cache;
 use crate::modules::registry;
 use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/modules/store", get(store_listing))
+        .route("/api/v1/modules/store/refresh", post(refresh_store))
         .route("/api/v1/modules/releases", get(list_releases))
         .route(
             "/api/v1/modules/registries",
@@ -67,48 +69,6 @@ pub async fn configured_registries(state: &AppState) -> Result<Vec<(i32, String,
     Ok(registries)
 }
 
-/// Fetches the latest release tag from GitHub's releases/latest API.
-/// Returns an empty string on any failure (non-GitHub URL, network error, etc.).
-async fn fetch_latest_release_version(repository_url: &str) -> String {
-    let parsed = match reqwest::Url::parse(repository_url) {
-        Ok(u) => u,
-        Err(_) => return String::new(),
-    };
-    if parsed.host_str() != Some("github.com") {
-        return String::new();
-    }
-    let path_segments: Vec<&str> = parsed.path_segments().map(|c| c.collect()).unwrap_or_default();
-    if path_segments.len() < 2 {
-        return String::new();
-    }
-    let owner = path_segments[0];
-    let repo = path_segments[1].trim_end_matches(".git");
-
-    let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let client = match reqwest::Client::builder()
-        .user_agent("ZFS-Dashboard")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-
-    match client.get(&api_url).send().await {
-        Ok(r) if r.status().is_success() => {
-            let json: Value = match r.json().await {
-                Ok(j) => j,
-                Err(_) => return String::new(),
-            };
-            json.get("tag_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        }
-        _ => String::new(),
-    }
-}
-
 async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let pg = state.pg.as_ref().ok_or(ApiError::InternalError("database unavailable".into()))?;
     let installed_rows = pg
@@ -125,22 +85,18 @@ async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, Api
     for (_, url, _) in configured_registries(&state).await? {
         match registry::fetch_index(&url).await {
             Ok(index) => {
-                // Fetch latest release versions from GitHub in parallel so the
-                // store listing reflects real upstream versions without needing
-                // a manually-maintained "version" field in index.json.
-                let repo_urls: Vec<String> = index
-                    .modules
-                    .iter()
-                    .map(|m| m.repository_url.clone())
-                    .collect();
-                let module_count = index.modules.len();
+                // Fetch latest release versions from the Redis-backed cache.
+                // No direct GitHub API calls here — the cache is populated by
+                // the background scheduler (every 6h) or the manual Refresh button.
                 let mut join_set = tokio::task::JoinSet::new();
-                for repo_url in repo_urls {
+                for module in &index.modules {
+                    let repo_url = module.repository_url.clone();
+                    let redis = state.redis.clone();
                     join_set.spawn(async move {
-                        fetch_latest_release_version(&repo_url).await
+                        github_cache::get_latest_release(&redis, &repo_url).await
                     });
                 }
-                let mut versions = Vec::with_capacity(module_count);
+                let mut versions = Vec::with_capacity(index.modules.len());
                 while let Some(res) = join_set.join_next().await {
                     versions.push(res.unwrap_or_default());
                 }
@@ -165,6 +121,33 @@ async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, Api
         }
     }
     Ok(Json(json!({ "modules": entries, "errors": errors })))
+}
+
+/// Manual refresh: invalidates all GitHub caches, re-fetches everything,
+/// then returns the fresh store listing.
+async fn refresh_store(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    mgmt_rate_limit(&state, &headers)?;
+
+    // Invalidate all cached GitHub data
+    github_cache::invalidate_all(&state.redis).await;
+
+    // Re-fetch all registry indexes and pre-warm the GitHub cache
+    let registries = configured_registries(&state).await?;
+    let mut all_repo_urls = Vec::new();
+    for (_, url, _) in &registries {
+        if let Ok(index) = registry::fetch_index(url).await {
+            for m in &index.modules {
+                all_repo_urls.push(m.repository_url.clone());
+            }
+        }
+    }
+    github_cache::refresh_all(&state.redis, &all_repo_urls).await;
+
+    // Now return the fresh store listing (will hit the freshly-warmed cache)
+    store_listing(State(state)).await
 }
 
 async fn list_registries(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -247,60 +230,13 @@ struct ReleasesQuery {
     repository_url: String,
 }
 
-async fn list_releases(Query(q): Query<ReleasesQuery>) -> Result<Json<Value>, ApiError> {
-    let repo_url = q.repository_url.trim();
-    let parsed = reqwest::Url::parse(repo_url)
-        .map_err(|e| ApiError::BadRequest(format!("invalid repository url: {e}")))?;
-    if parsed.host_str() != Some("github.com") {
-        return Err(ApiError::BadRequest("releases fetch only supported for github.com repositories".into()));
-    }
-    let path_segments: Vec<&str> = parsed.path_segments().map(|c| c.collect()).unwrap_or_default();
-    if path_segments.len() < 2 {
-        return Err(ApiError::BadRequest("invalid github repository path".into()));
-    }
-    let owner = path_segments[0];
-    let repo = path_segments[1].trim_end_matches(".git");
-
-    let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases");
-    let client = reqwest::Client::builder()
-        .user_agent("ZFS-Dashboard")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| ApiError::InternalError(e.to_string()))?;
-
-    let resp = client.get(&api_url).send().await;
-    let releases_json: Vec<Value> = match resp {
-        Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
-        _ => Vec::new(),
-    };
-
-    let mut releases = Vec::new();
-    for r in releases_json {
-        let tag_name = r.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
-        let name = r.get("name").and_then(|v| v.as_str()).unwrap_or(tag_name);
-        let published_at = r.get("published_at").and_then(|v| v.as_str()).unwrap_or("");
-        
-        let assets = r.get("assets").and_then(|v| v.as_array());
-        let wasm_asset = assets.and_then(|arr| {
-            arr.iter().find(|a| {
-                a.get("name").and_then(|n| n.as_str()).map(|n| n.ends_with(".wasm")).unwrap_or(false)
-            })
-        });
-
-        let wasm_url = wasm_asset
-            .and_then(|a| a.get("browser_download_url"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        if !tag_name.is_empty() {
-            releases.push(json!({
-                "tag_name": tag_name,
-                "name": name,
-                "published_at": published_at,
-                "wasm_url": wasm_url,
-            }));
-        }
-    }
-
+async fn list_releases(
+    State(state): State<AppState>,
+    Query(q): Query<ReleasesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    // All GitHub API calls go through the Redis-backed cache.
+    // No direct GitHub API call here — the cache is populated by the
+    // background scheduler (every 6h) or the manual Refresh button.
+    let releases = github_cache::get_all_releases(&state.redis, &q.repository_url).await;
     Ok(Json(json!({ "releases": releases })))
 }

@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod github_cache;
 pub mod manifest;
 pub mod net;
 pub mod registry;

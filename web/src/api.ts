@@ -289,6 +289,11 @@ export const api = {
   getLatestRelease: () =>
     request<{ tag_name: string }>('/health/latest-release'),
 
+  refreshModuleStore: () =>
+    request<{ modules: StoreModule[]; errors: Array<{ registry_url: string; error: string }> }>('/modules/store/refresh', {
+      method: 'POST',
+    }),
+
   // ── Pool Settings ──────────────────────────────────────────────────────────
   getPoolSettings: (name: string) =>
     request<{

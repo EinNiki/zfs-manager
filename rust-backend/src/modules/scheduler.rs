@@ -1,22 +1,65 @@
 use serde_json::Value;
+use std::time::Instant;
 use tracing::{info, warn};
 
+use super::github_cache;
 use super::runner::{execute_module, is_due, parse_schedule};
 use crate::state::AppState;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+const GITHUB_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
 
 /// Polls active module configs and triggers due runs. DB state is the single
 /// source of truth, so config changes take effect on the next tick without
 /// any registration bookkeeping.
+///
+/// Also refreshes the GitHub release cache every 6 hours so the Store and
+/// Sidebar version checks never hit the GitHub API rate limit.
 pub async fn run_module_scheduler(state: AppState) {
     info!("Module scheduler started (tick {}s)", POLL_INTERVAL.as_secs());
+    let mut last_github_refresh: Option<Instant> = None;
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
         if let Err(e) = tick(&state).await {
             warn!("Module scheduler tick failed: {e}");
         }
+
+        // Refresh GitHub cache every 6 hours
+        let should_refresh = last_github_refresh
+            .map(|t| t.elapsed() >= GITHUB_REFRESH_INTERVAL)
+            .unwrap_or(true);
+        if should_refresh {
+            last_github_refresh = Some(Instant::now());
+            let state2 = state.clone();
+            tokio::spawn(async move {
+                refresh_github_cache(&state2).await;
+            });
+        }
     }
+}
+
+/// Pre-warms the GitHub release cache for all modules in all registries
+/// plus the ZFS-Dashboard repo itself.
+async fn refresh_github_cache(state: &AppState) {
+    use crate::modules::registry;
+
+    let mut repo_urls = vec!["https://github.com/ZFS-Dashboard/ZFS-Dashboard".to_string()];
+
+    // Collect all module repo URLs from all configured registries
+    if let Ok(registries) = crate::routes::module_store::configured_registries(state).await {
+        for (_, url, _) in &registries {
+            if let Ok(index) = registry::fetch_index(url).await {
+                for m in &index.modules {
+                    if !repo_urls.contains(&m.repository_url) {
+                        repo_urls.push(m.repository_url.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    github_cache::refresh_all(&state.redis, &repo_urls).await;
+    info!("GitHub cache refreshed ({} repos)", repo_urls.len());
 }
 
 async fn tick(state: &AppState) -> Result<(), String> {

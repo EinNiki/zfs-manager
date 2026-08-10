@@ -44,6 +44,9 @@ export async function getModuleStoreCached(forceRefresh = false): Promise<{ modu
     }
   }
 
+  // When forceRefresh is true, the caller should use api.refreshModuleStore()
+  // directly (which invalidates the backend GitHub cache). This function is
+  // only used for the non-force path, so we always call the regular endpoint.
   const freshData = await api.getModuleStore();
   try {
     localStorage.setItem(STORE_CACHE_KEY, JSON.stringify({
@@ -55,6 +58,19 @@ export async function getModuleStoreCached(forceRefresh = false): Promise<{ modu
   }
 
   return freshData;
+}
+
+/// Updates the localStorage cache with fresh data from the refresh endpoint.
+/// Called after api.refreshModuleStore() returns.
+export function updateModuleStoreCache(data: { modules: StoreModule[]; errors: Array<{ registry_url: string; error: string }> }) {
+  try {
+    localStorage.setItem(STORE_CACHE_KEY, JSON.stringify({
+      timestamp: Date.now(),
+      data,
+    }));
+  } catch (err) {
+    console.warn('Failed to cache module store data:', err);
+  }
 }
 
 export async function getActiveModulesCached(forceRefresh = false): Promise<{ modules: ActiveModule[] }> {

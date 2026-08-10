@@ -439,7 +439,7 @@ async fn main() {
     };
 
     let api = Router::new()
-        .merge(routes::health::router())
+        .merge(routes::health::router(app_state.clone()))
         .merge(routes::auth::router(app_state.clone()))
         .merge(routes::settings::router(app_state.clone()))
         .merge(routes::pools::router(app_state.clone()))

@@ -1,13 +1,14 @@
-use axum::{routing::get, Json, Router};
+use axum::{extract::State, routing::get, Json, Router};
 use serde_json::{json, Value};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 use tokio::process::Command;
 
-pub fn router() -> Router {
+use crate::state::AppState;
+
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/health/latest-release", get(latest_release))
+        .with_state(state)
 }
 
 async fn run_git_cmd(args: &[&str]) -> Option<String> {
@@ -88,53 +89,17 @@ async fn health() -> Json<Value> {
     }))
 }
 
-/// In-memory cache for the latest GitHub release tag.
-/// GitHub's unauthenticated rate limit is 60 requests/hour per IP, so we
-/// cache the result for 1 hour — regardless of how many users request it,
-/// the server only hits GitHub once per hour.
-static RELEASE_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
-const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
-
-async fn latest_release() -> Json<Value> {
-    // Check cache first
-    if let Ok(cache) = RELEASE_CACHE.lock() {
-        if let Some((ref tag, ref fetched_at)) = *cache {
-            if fetched_at.elapsed() < RELEASE_CACHE_TTL {
-                return Json(json!({ "tag_name": tag }));
-            }
-        }
-    }
-
-    let client = match reqwest::Client::builder()
-        .user_agent("ZFS-Dashboard")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return Json(json!({ "tag_name": "" })),
-    };
-
-    match client
-        .get("https://api.github.com/repos/ZFS-Dashboard/ZFS-Dashboard/releases/latest")
-        .send()
-        .await
-    {
-        Ok(r) if r.status().is_success() => {
-            let json: Value = r.json().await.unwrap_or(json!({}));
-            let tag = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if let Ok(mut cache) = RELEASE_CACHE.lock() {
-                *cache = Some((tag.clone(), Instant::now()));
-            }
-            Json(json!({ "tag_name": tag }))
-        }
-        _ => {
-            // On failure, return the stale cache if available, otherwise empty
-            if let Ok(cache) = RELEASE_CACHE.lock() {
-                if let Some((ref tag, _)) = *cache {
-                    return Json(json!({ "tag_name": tag }));
-                }
-            }
-            Json(json!({ "tag_name": "" }))
-        }
-    }
+/// Returns the latest GitHub release tag for the ZFS-Dashboard repo.
+/// Uses the same Redis-backed cache as the module store — no direct
+/// GitHub API call on every request. The cache is refreshed every 6h
+/// by the background scheduler or when the Store Refresh button is clicked.
+async fn latest_release(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let tag = crate::modules::github_cache::get_latest_release(
+        &state.redis,
+        "https://github.com/ZFS-Dashboard/ZFS-Dashboard",
+    )
+    .await;
+    Json(json!({ "tag_name": tag }))
 }

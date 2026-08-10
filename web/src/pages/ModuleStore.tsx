@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { Package, Plus, Trash2, Download, CheckCircle, AlertTriangle, RefreshCw, ArrowUpCircle, Search } from 'lucide-react';
+import { Package, Plus, Trash2, Download, CheckCircle, AlertTriangle, RefreshCw, ArrowUpCircle, Search, Info } from 'lucide-react';
 import { api } from '../api';
 import { StoreModule } from '../types';
 import PageTransition from '../components/PageTransition';
 import Modal from '../components/Modal';
 import { useNotifications } from '../context/NotificationContext';
-import { getModuleStoreCached, isUpdateAvailable } from '../utils/moduleCache';
+import { getModuleStoreCached, isUpdateAvailable, updateModuleStoreCache } from '../utils/moduleCache';
 
 const cardStyle: React.CSSProperties = {
   background: 'var(--bg-surface)', border: '1px solid var(--border)',
@@ -122,7 +122,17 @@ export default function ModuleStore() {
   const reload = async (isNewAdd = false, forceRefresh = false) => {
     setLoading(true);
     try {
-      const [store, regs] = await Promise.all([getModuleStoreCached(forceRefresh), api.getRegistries()]);
+      let store;
+      if (forceRefresh) {
+        // Force refresh: call the backend refresh endpoint which invalidates
+        // the GitHub cache, re-fetches all registries + release info, and
+        // returns the fresh store listing.
+        store = await api.refreshModuleStore();
+        updateModuleStoreCache(store);
+      } else {
+        store = await getModuleStoreCached(false);
+      }
+      const regs = await api.getRegistries();
       setRegistries(regs.registries);
       setErrors(store.errors);
       setRawStoreModules(store.modules);
@@ -360,7 +370,7 @@ export default function ModuleStore() {
               Module Store
             </h1>
             <p style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', marginTop: 4, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              Community modules · checksum-verified · sandboxed
+              Community modules · sandboxed
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -688,6 +698,16 @@ export default function ModuleStore() {
                 <p style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--text-secondary)' }}>
                   Select a version from GitHub Releases:
                 </p>
+
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
+                  background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)',
+                  borderRadius: 'var(--radius)', fontSize: 11.5, fontFamily: 'var(--font-ui)',
+                  color: 'var(--text-secondary)',
+                }}>
+                  <Info size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                  <span>Version list is cached and refreshed every 6 hours. Click the Refresh button in the Store to update it manually.</span>
+                </div>
 
                 {loadingReleases ? (
                   <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--text-muted)', padding: '12px 0' }}>
