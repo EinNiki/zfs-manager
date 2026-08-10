@@ -318,8 +318,36 @@ async fn uninstall(
 ) -> Result<Json<Value>, ApiError> {
     mgmt_rate_limit(&state, &headers)?;
     let pg = db(&state)?;
+
+    // Delete data that has no FK cascade (module_id is plain TEXT, not REFERENCES).
     let _ = pg.execute("DELETE FROM module_metrics WHERE module_id = $1", &[&id]).await;
     let _ = pg.execute("DELETE FROM module_audit_log WHERE module_id = $1", &[&id]).await;
+
+    // Remove stale widget placements from all custom tabs.
+    // The layout column is a JSONB array of objects with a `module_id` field.
+    let rows = pg
+        .query("SELECT id, layout FROM custom_tabs", &[])
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+    for row in &rows {
+        let tab_id: i32 = row.get(0);
+        let layout: Value = row.get(1);
+        if let Some(arr) = layout.as_array() {
+            let filtered: Vec<&Value> = arr
+                .iter()
+                .filter(|item| item.get("module_id").and_then(|v| v.as_str()) != Some(&id))
+                .collect();
+            if filtered.len() != arr.len() {
+                let new_layout = Value::Array(filtered.into_iter().cloned().collect());
+                let _ = pg
+                    .execute(
+                        "UPDATE custom_tabs SET layout = $1 WHERE id = $2",
+                        &[&new_layout, &tab_id],
+                    )
+                    .await;
+            }
+        }
+    }
 
     let deleted = pg
         .execute("DELETE FROM modules WHERE id = $1", &[&id])
