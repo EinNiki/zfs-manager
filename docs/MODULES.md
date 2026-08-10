@@ -6,9 +6,32 @@ Modules are written in Rust, compiled to a **WebAssembly component**, and run **
 
 ---
 
+## Default Registry
+
+The module Store fetches its listings from a **registry** — an `index.json` file at a public URL. By default, ZFS Dashboard uses the built-in registry from this repo:
+
+```
+https://raw.githubusercontent.com/ZFS-Dashboard/ZFS-Dashboard/refs/heads/main/registry/index.json
+```
+
+To use a **custom registry** instead (e.g. your own `index.json` with private or community modules), set the `MODULE_REGISTRY_URL` environment variable on the backend container:
+
+```env
+MODULE_REGISTRY_URL=https://example.com/my-registry/index.json
+```
+
+This replaces the default registry — the Store will fetch from your URL instead. Users can still add additional registries via the Store UI at runtime (those are stored in the database and persisted across restarts).
+
+| Variable | Default | Description |
+|---|---|---|
+| `MODULE_REGISTRY_URL` | *(built-in ZFS-Dashboard registry)* | URL to the `index.json` the Store uses as its default registry. |
+
+---
+
 ## Table of Contents
 
 - [How It Works](#how-it-works)
+- [Default Registry](#default-registry)
 - [Security Model](#security-model)
 - [Module Lifecycle](#module-lifecycle)
 - [Writing a Module from Scratch](#writing-a-module-from-scratch)
