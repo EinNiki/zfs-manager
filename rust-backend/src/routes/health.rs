@@ -41,7 +41,7 @@ async fn health() -> Json<Value> {
     }
 
     // 5. Upstream commit hash (original repository)
-    let upstream_hash = run_git_cmd(&["ls-remote", "https://github.com/ZFS-Manager/ZFS-Manager.git", "refs/heads/main"])
+    let upstream_hash = run_git_cmd(&["ls-remote", "https://github.com/ZFS-Dashboard/ZFS-Dashboard.git", "refs/heads/main"])
         .await
         .and_then(|output| {
             output.split_whitespace().next().map(|s| s.to_string())

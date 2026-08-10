@@ -30,7 +30,22 @@ pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) ->
     let manifest_json: Value = row.get(0);
     let manifest: Manifest =
         serde_json::from_value(manifest_json).map_err(|e| format!("stored manifest invalid: {e}"))?;
-    let config: Value = row.get::<_, Option<Value>>(2).unwrap_or_else(|| serde_json::json!({}));
+    let mut config: Value = row.get::<_, Option<Value>>(2).unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = config.as_object_mut() {
+        for field in &manifest.config_schema {
+            if field.field_type != "secret" && !obj.contains_key(&field.key) {
+                if let Some(ref def) = field.default {
+                    obj.insert(field.key.clone(), def.clone());
+                } else if field.field_type == "multiselect" {
+                    obj.insert(field.key.clone(), serde_json::json!([]));
+                } else if field.field_type == "number" {
+                    obj.insert(field.key.clone(), serde_json::json!(0));
+                } else {
+                    obj.insert(field.key.clone(), serde_json::json!(""));
+                }
+            }
+        }
+    }
     let secrets_blob: Option<Vec<u8>> = row.get(3);
 
     let secret_values: HashMap<String, String> = match secrets_blob {
