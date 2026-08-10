@@ -1,5 +1,7 @@
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 
 pub fn router() -> Router {
@@ -86,10 +88,23 @@ async fn health() -> Json<Value> {
     }))
 }
 
-/// Proxies the GitHub releases/latest API call through the backend so that
-/// the GitHub rate limit (60 req/hour per IP for unauthenticated requests)
-/// is shared across all users of this server instead of per-browser-IP.
+/// In-memory cache for the latest GitHub release tag.
+/// GitHub's unauthenticated rate limit is 60 requests/hour per IP, so we
+/// cache the result for 1 hour — regardless of how many users request it,
+/// the server only hits GitHub once per hour.
+static RELEASE_CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
+
 async fn latest_release() -> Json<Value> {
+    // Check cache first
+    if let Ok(cache) = RELEASE_CACHE.lock() {
+        if let Some((ref tag, ref fetched_at)) = *cache {
+            if fetched_at.elapsed() < RELEASE_CACHE_TTL {
+                return Json(json!({ "tag_name": tag }));
+            }
+        }
+    }
+
     let client = match reqwest::Client::builder()
         .user_agent("ZFS-Dashboard")
         .timeout(std::time::Duration::from_secs(10))
@@ -106,10 +121,20 @@ async fn latest_release() -> Json<Value> {
     {
         Ok(r) if r.status().is_success() => {
             let json: Value = r.json().await.unwrap_or(json!({}));
-            Json(json!({
-                "tag_name": json.get("tag_name").and_then(|v| v.as_str()).unwrap_or(""),
-            }))
+            let tag = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if let Ok(mut cache) = RELEASE_CACHE.lock() {
+                *cache = Some((tag.clone(), Instant::now()));
+            }
+            Json(json!({ "tag_name": tag }))
         }
-        _ => Json(json!({ "tag_name": "" })),
+        _ => {
+            // On failure, return the stale cache if available, otherwise empty
+            if let Ok(cache) = RELEASE_CACHE.lock() {
+                if let Some((ref tag, _)) = *cache {
+                    return Json(json!({ "tag_name": tag }));
+                }
+            }
+            Json(json!({ "tag_name": "" }))
+        }
     }
 }
