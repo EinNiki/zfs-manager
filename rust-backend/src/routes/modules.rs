@@ -318,6 +318,9 @@ async fn uninstall(
 ) -> Result<Json<Value>, ApiError> {
     mgmt_rate_limit(&state, &headers)?;
     let pg = db(&state)?;
+    let _ = pg.execute("DELETE FROM module_metrics WHERE module_id = $1", &[&id]).await;
+    let _ = pg.execute("DELETE FROM module_audit_log WHERE module_id = $1", &[&id]).await;
+
     let deleted = pg
         .execute("DELETE FROM modules WHERE id = $1", &[&id])
         .await
