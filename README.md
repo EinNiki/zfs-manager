@@ -55,6 +55,8 @@ Built with a lightning-fast **Rust/Axum** backend and a dynamic **React + Tailwi
 
 ## 🏗️ Architecture & Tech Stack
 
+For a detailed architecture overview, see [`docs/README.md`](docs/README.md).
+
 | Layer | Technologies |
 |---|---|
 | **Backend** | Rust, Axum 0.7, Tokio, Serde, tokio-postgres, refinery (migrations) |
@@ -62,18 +64,6 @@ Built with a lightning-fast **Rust/Axum** backend and a dynamic **React + Tailwi
 | **Frontend** | React 19, TypeScript, Vite 6, Tailwind CSS 4, Recharts, Framer Motion |
 | **Datastore** | PostgreSQL 16 (Metrics History), Redis 7 (Live Cache & PubSub) |
 | **Deployment**| Docker Compose, single app container, Alpine 3.20 (ZFS 2.2.5 ABI) |
-
-### Single-container architecture
-
-The backend and frontend ship as **one container**: a multi-stage build
-compiles the React app to static assets, which Axum serves directly via
-`tower-http::ServeDir` (with an `index.html` fallback for client-side routes).
-Nginx is gone — one process, one port, no CORS split.
-
-PostgreSQL and Redis stay as **separate services** on purpose: they have their
-own lifecycle (upgrades, backups), persistent state, and battle-tested official
-images. Merging them into the app container would gain nothing and complicate
-signal handling and partial restarts.
 
 ---
 
@@ -86,7 +76,7 @@ write it into the dashboard as metrics, à la Home Assistant + HACS.
 Modules are written in Rust, compiled to a **WebAssembly component**, and run
 **sandboxed** inside the backend. They are never native code and the server
 **never compiles module source** — it only ever runs finished, checksum-verified
-`.wasm` artifacts. See [SECURITY.md](SECURITY.md) for the full threat model.
+`.wasm` artifacts.
 
 - **Store** — browse and install modules from configured registries. A default
   registry ships built-in; you can add custom registry URLs in the UI.
@@ -95,16 +85,10 @@ Modules are written in Rust, compiled to a **WebAssembly component**, and run
 - **Sideload** — build your own module locally and upload the `.wasm` directly,
   bypassing any registry.
 
-The bundled [`modules/immich`](modules/immich) module is a complete example and
-doubles as the **authoring guide** for writing your own.
-
-**Module resource limits** (per run, overridable via env):
-
-| Variable | Default | Description |
-|---|---|---|
-| `ZFS_MODULE_FUEL` | `2000000000` | Instruction budget (wasmtime fuel) |
-| `ZFS_MODULE_MEMORY_BYTES` | `67108864` | Linear memory cap (64 MiB) |
-| `ZFS_MODULE_TIMEOUT_SECS` | `30` | Wall-clock timeout |
+**Full documentation**: [`docs/MODULES.md`](docs/MODULES.md) — covers the
+security model, module lifecycle, authoring guide (WIT interface, manifest
+fields, building to `wasm32-wasip2`), publishing via registry or sideload,
+resource limits, API reference, and database schema.
 
 ---
 
@@ -137,7 +121,7 @@ Open **http://localhost:8080** in your browser.
 
 ## ⚙️ Configuration
 
-Environment variables are set via a `.env` file (see `.env.example`).
+Environment variables are set via a `.env` file (see `.env.example`). For the full list including module resource limits, see [`docs/README.md`](docs/README.md).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -146,7 +130,7 @@ Environment variables are set via a `.env` file (see `.env.example`).
 | `ZFS_WEB_PORT` | `8080` | Port the web UI + API is exposed on. |
 | `ZFS_SECRETS_MASTER_KEY` | *(auto)* | Base64 32-byte key for module secret encryption. Auto-generated into the data dir when unset. |
 
-> **Data directory**: hardcoded to `/app` inside the container (bind-mounted from `/home/zfs-manager` on the host). The entrypoint auto-migrates data from legacy paths (`/home/docker/zfs-manager`, `/home/zfs-manager`) on first start, so no env var is needed.
+> **Data directory**: hardcoded to `/app` inside the container (bind-mounted from a host directory of your choice — e.g. `/home/zfs-dashboard`, `/opt/zfs-dashboard`, `/ssd/zfs-dashboard` — see `compose.yaml`). The entrypoint auto-migrates data from legacy paths on first start, so no env var is needed.
 
 ---
 
@@ -154,16 +138,16 @@ Environment variables are set via a `.env` file (see `.env.example`).
 
 - **Product rename**: The project was renamed from **ZFS Manager** to **ZFS Dashboard**. The `ZFS_DASHBOARD_DATA` / `ZFS_MANAGER_DATA` env vars have been removed — the data directory is now hardcoded to `/app` inside the container, and the entrypoint migrates data from legacy paths automatically on first start. The ZFS user property `zfsDashboard:scrub_schedule` keeps its name so existing pools don't lose their scrub schedules.
 - **Kernel Compatibility**: The container uses Alpine 3.20 (which ships ZFS 2.2.5). This provides the best compatibility for 2.2.x host kernels. If your host kernel module is 2.4.x, change `FROM alpine:3.20` to `FROM alpine:latest` in the root `Dockerfile`.
-- **Privileged Mode**: The app container runs as `privileged: true` and mounts host paths (`/dev`, `/proc`, `/sys/module/zfs`) so the ZFS utilities inside the container can interact with your host's kernel and block devices. Because of this, **module code is treated as fully untrusted** and runs in a WebAssembly sandbox — see [SECURITY.md](SECURITY.md).
+- **Privileged Mode**: The app container runs as `privileged: true` and mounts host paths (`/dev`, `/proc`, `/sys/module/zfs`) so the ZFS utilities inside the container can interact with your host's kernel and block devices. Because of this, **module code is treated as fully untrusted** and runs in a WebAssembly sandbox — see [`docs/MODULES.md`](docs/MODULES.md) for the full security model.
 
 ---
 
 ## 🛠️ Writing your own module
 
-See [`modules/immich/README.md`](modules/immich/README.md) — it's a working
-example and a step-by-step authoring guide (repo layout, the capability API,
-manifest fields, building to `wasm32-wasip2`, and installing via sideload or a
-registry).
+See [`docs/MODULES.md`](docs/MODULES.md) for a complete authoring guide:
+project setup, the WIT host API interface, implementing the `run` entry point,
+manifest fields, building to `wasm32-wasip2`, and publishing via registry or
+sideload.
 
 ---
 
