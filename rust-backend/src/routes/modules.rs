@@ -614,6 +614,9 @@ async fn switch_version(
         .map_err(ApiError::BadRequest)?;
 
     // Write WASM to disk
+    tokio::fs::create_dir_all(registry::modules_dir())
+        .await
+        .map_err(|e| ApiError::InternalError(format!("cannot create modules dir: {e}")))?;
     let wasm_path = registry::wasm_path(&id)
         .ok_or(ApiError::BadRequest("invalid module id".into()))?;
     tokio::fs::write(&wasm_path, &wasm)
