@@ -8,8 +8,7 @@
       "icon": "camera",
       "repository_url": "https://github.com/ZFS-Dashboard/immich-module",
       "manifest_url": "https://raw.githubusercontent.com/ZFS-Dashboard/immich-module/main/module.toml",
-      "wasm_url": "https://github.com/ZFS-Dashboard/immich-module/releases/latest/download/immich.wasm",
-      "wasm_sha256": "1d1a2fbf0b774bb011dc891bd309012bbc787130327eb22436a42136eebf756d"
+      "wasm_url": "https://github.com/ZFS-Dashboard/immich-module/releases/latest/download/immich.wasm"
     }
   ]
 }

@@ -2,7 +2,7 @@
 
 ZFS Dashboard can be extended with **modules** — community-buildable extensions that fetch external data (e.g. from other self-hosted services) and write it into the dashboard as metrics. Think Home Assistant + HACS, but for storage infrastructure.
 
-Modules are written in Rust, compiled to a **WebAssembly component**, and run **sandboxed** inside the backend. They are never native code, and the server never compiles module source — it only runs finished, checksum-verified `.wasm` artifacts downloaded from GitHub Releases.
+Modules are written in Rust, compiled to a **WebAssembly component**, and run **sandboxed** inside the backend. They are never native code, and the server never compiles module source — it only runs finished `.wasm` artifacts downloaded from GitHub Releases.
 
 ---
 
@@ -48,7 +48,7 @@ This replaces the default registry — the Store will fetch from your URL instea
   - [How downloads work](#how-downloads-work)
   - [Release workflow template](#release-workflow-template)
   - [Creating a new release](#creating-a-new-release)
-  - [Updating the registry after a release](#updating-the-registry-after-a-release)
+  - [After a release](#after-a-release)
 - [Resource Limits](#resource-limits)
 - [API Reference](#api-reference)
 - [Database Schema](#database-schema)
@@ -94,7 +94,6 @@ Modules run as **untrusted code** in a WebAssembly sandbox. The host enforces:
 - **Domain allowlist** — `http-fetch` only reaches hosts in the module's `network_allowlist` (from the manifest) plus hosts extracted from `url`-type config fields. Redirects are disabled so a redirect can't escape the allowlist.
 - **SSRF protection** — resolved IPs are checked against loopback, link-local (incl. cloud metadata `169.254.169.254`), unspecified, multicast, and broadcast ranges. Private LAN ranges are **allowed** (reaching self-hosted services is the point).
 - **Port scoping** — a bare host entry matches only the scheme's default port (80/443), not all ports. A `host:port` entry matches only that exact port. This prevents an allowlist entry for a LAN host from being abused to reach Postgres or SSH on the same host.
-- **Checksum verification** — when installing from a registry, the `.wasm` SHA-256 is verified against the `wasm_sha256` in `index.json`. Mismatched checksums are rejected.
 - **Encrypted secrets** — secret-type config values are AES-256-GCM encrypted in the database. Modules receive them decrypted at runtime via `get-secret`; they never appear in `config_json`.
 - **Resource limits** — fuel (instruction budget), memory cap, and wall-clock timeout prevent runaway modules. See [Resource Limits](#resource-limits).
 
@@ -478,8 +477,7 @@ A registry is an `index.json` file hosted at a public URL. The default registry 
       "icon": "database",
       "repository_url": "https://github.com/your-name/my-module",
       "manifest_url": "https://raw.githubusercontent.com/your-name/my-module/main/module.toml",
-      "wasm_url": "https://github.com/your-name/my-module/releases/latest/download/my-module.wasm",
-      "wasm_sha256": "a1b2c3d4e5f6..."
+      "wasm_url": "https://github.com/your-name/my-module/releases/latest/download/my-module.wasm"
     }
   ]
 }
@@ -494,7 +492,6 @@ A registry is an `index.json` file hosted at a public URL. The default registry 
 | `repository_url` | GitHub repo URL. Used for release listing and version switching in the Store UI. |
 | `manifest_url` | Direct URL to the `module.toml` file (usually on `main` branch via `raw.githubusercontent.com`). |
 | `wasm_url` | Direct URL to the `.wasm` artifact. Use `releases/latest/download/<name>.wasm` for the latest release. |
-| `wasm_sha256` | SHA-256 hash of the `.wasm` file (64 hex chars). Verified on install. |
 
 > **Note:** The `version` field is **not** needed in `index.json`. The store listing fetches the latest version from the GitHub releases API (`releases/latest`) at runtime — see [How downloads work](#how-downloads-work).
 
@@ -532,15 +529,13 @@ When a user installs a module from the Store, the backend:
 1. Fetches the registry `index.json` to find the module entry.
 2. Downloads the `.wasm` from the `wasm_url` — which typically points to `https://github.com/<owner>/<repo>/releases/latest/download/<name>.wasm`. This URL always serves the **latest** GitHub Release asset.
 3. Downloads the `module.toml` from the `manifest_url` to get the current manifest (config schema, permissions, etc.).
-4. Verifies the SHA-256 checksum of the downloaded `.wasm` against `wasm_sha256` in `index.json`.
-5. Stores the `.wasm` on disk and inserts the module into the database.
+4. Stores the `.wasm` on disk and inserts the module into the database.
 
 For **version switching** (updating to a specific older release), the Store UI fetches all releases via the GitHub API (`GET /api.github.com/repos/<owner>/<repo>/releases`) and lets the user pick. The selected release's `browser_download_url` is used to download that specific `.wasm` version.
 
 This means:
 - **The latest release** is always what new installs get (via `releases/latest/download/...`).
 - **Specific versions** are available via the version picker (which queries the GitHub Releases API).
-- **The `wasm_sha256` in `index.json`** must match the **latest** release's `.wasm` — update it whenever you cut a new release.
 - **The version shown in the Store** is fetched live from `releases/latest` — no `version` field in `index.json` needed.
 
 ### Release workflow template
@@ -638,25 +633,11 @@ git push origin v1.0.0
 # → workflow triggers, builds, and creates the release
 ```
 
-### Updating the registry after a release
+### After a release
 
-After a new release is built, you need to update `wasm_sha256` in the registry `index.json` so the checksum matches the new artifact:
+The `wasm_url` in `index.json` uses `releases/latest/download/my-module.wasm`, which always points to the newest release automatically — **no registry update needed** after a new release. The version shown in the Store is fetched live from the GitHub releases API.
 
-```bash
-# Download the new artifact from the release
-gh release download v1.0.0 --repo your-name/my-module --output my-module.wasm
-
-# Compute the SHA-256
-sha256sum my-module.wasm
-# → a1b2c3d4e5f6...  (64 hex chars)
-
-# Update registry/index.json in the ZFS-Dashboard repo:
-#   "wasm_sha256": "a1b2c3d4e5f6..."
-```
-
-The `wasm_url` does **not** need updating — `releases/latest/download/my-module.wasm` always points to the newest release automatically.
-
-You can automate this with a workflow that updates the registry after a successful release, or do it manually. The key point: **`wasm_sha256` in `index.json` must always match the latest release's `.wasm`**, otherwise new installs will fail the checksum verification.
+Just push to `main` (or tag a release), and the workflow handles the rest.
 
 ---
 

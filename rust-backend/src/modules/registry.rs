@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::warn;
 
 use super::manifest::{Manifest, MAX_MANIFEST_BYTES, MAX_WASM_BYTES};
 
@@ -39,8 +38,6 @@ pub struct RegistryEntry {
     pub repository_url: String,
     pub manifest_url: String,
     pub wasm_url: String,
-    /// Hex SHA-256 of the wasm artifact — the trust anchor of an install.
-    pub wasm_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,14 +115,14 @@ pub async fn fetch_index(url: &str) -> Result<RegistryIndex, String> {
     let index: RegistryIndex = serde_json::from_slice(&body)
         .map_err(|_| "Ungültige Registry-URL: Keine gültige index.json Datei erkannt".to_string())?;
     for entry in &index.modules {
-        if entry.id.is_empty() || entry.wasm_sha256.len() != 64 {
+        if entry.id.is_empty() {
             return Err(format!("registry entry {:?} is malformed", entry.id));
         }
     }
     Ok(index)
 }
 
-/// A fully downloaded, checksum-verified module package.
+/// A fully downloaded module package.
 pub struct ModulePackage {
     pub manifest: Manifest,
     pub wasm: Vec<u8>,
@@ -136,7 +133,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }
 
-/// Downloads manifest + wasm for a registry entry and verifies the checksum.
+/// Downloads manifest + wasm for a registry entry.
 pub async fn download_package(entry: &RegistryEntry) -> Result<ModulePackage, String> {
     download_package_custom(entry, None, None).await
 }
@@ -176,13 +173,6 @@ pub async fn download_package_custom(
 
     let wasm = fetch_capped(&client, &target_wasm_url, MAX_WASM_BYTES).await?;
     let digest = sha256_hex(&wasm);
-
-    if custom_wasm_url.is_none() && !entry.wasm_sha256.is_empty() {
-        if !digest.eq_ignore_ascii_case(&entry.wasm_sha256) {
-            warn!("module {}: checksum mismatch (expected {}, got {digest})", entry.id, entry.wasm_sha256);
-            return Err("wasm checksum does not match the registry index".into());
-        }
-    }
 
     Ok(ModulePackage {
         manifest,
