@@ -39,16 +39,20 @@ pub async fn run_module_scheduler(state: AppState) {
 }
 
 /// Pre-warms the GitHub release cache for all modules in all registries
-/// plus the ZFS-Dashboard repo itself.
+/// plus the ZFS-Dashboard repo itself. Also pre-warms the registry index
+/// cache so the store listing is fast on first load.
 async fn refresh_github_cache(state: &AppState) {
     use crate::modules::registry;
 
     let mut repo_urls = vec!["https://github.com/ZFS-Dashboard/ZFS-Dashboard".to_string()];
 
-    // Collect all module repo URLs from all configured registries
+    // Collect all module repo URLs from all configured registries.
+    // Use fetch_index (uncached) to force a fresh fetch every 6h, which
+    // also updates the Redis cache for the next 5 minutes of store requests.
     if let Ok(registries) = crate::routes::module_store::configured_registries(state).await {
         for (_, url, _) in &registries {
-            if let Ok(index) = registry::fetch_index(url).await {
+            // fetch_index_cached will store the fresh index in Redis
+            if let Ok(index) = registry::fetch_index_cached(url, &state.redis).await {
                 for m in &index.modules {
                     if !repo_urls.contains(&m.repository_url) {
                         repo_urls.push(m.repository_url.clone());
@@ -59,7 +63,11 @@ async fn refresh_github_cache(state: &AppState) {
     }
 
     github_cache::refresh_all(&state.redis, &repo_urls).await;
-    info!("GitHub cache refreshed ({} repos)", repo_urls.len());
+
+    // Also invalidate and rebuild the store listing cache
+    crate::routes::module_store::invalidate_store_cache(state).await;
+
+    info!("GitHub cache + registry indexes refreshed ({} repos)", repo_urls.len());
 }
 
 async fn tick(state: &AppState) -> Result<(), String> {

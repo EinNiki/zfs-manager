@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 
 use super::manifest::{Manifest, MAX_MANIFEST_BYTES, MAX_WASM_BYTES};
 
+use redis::AsyncCommands;
+
 pub const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/ZFS-Dashboard/ZFS-Dashboard/refs/heads/main/registry/index.json";
 
@@ -120,6 +122,96 @@ pub async fn fetch_index(url: &str) -> Result<RegistryIndex, String> {
         }
     }
     Ok(index)
+}
+
+const REGISTRY_CACHE_TTL: u64 = 300; // 5 minutes
+
+fn registry_cache_key(url: &str) -> String {
+    use sha2::Digest;
+    let hash = hex::encode(sha2::Sha256::digest(url.as_bytes()));
+    format!("registry:index:{hash}")
+}
+
+/// Fetches a registry index with Redis caching (5 min TTL).
+/// Falls back to direct fetch if Redis is unavailable.
+pub async fn fetch_index_cached(
+    url: &str,
+    redis: &Option<redis::aio::ConnectionManager>,
+) -> Result<RegistryIndex, String> {
+    // Try Redis cache first
+    if let Some(redis) = redis {
+        let mut conn = redis.clone();
+        let key = registry_cache_key(url);
+        if let Ok(cached) = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            conn.get::<_, Option<String>>(&key),
+        ).await {
+            if let Ok(Some(json_str)) = cached {
+                if let Ok(index) = serde_json::from_str::<RegistryIndex>(&json_str) {
+                    return Ok(index);
+                }
+            }
+        }
+    }
+
+    // Cache miss — fetch from network
+    let index = fetch_index(url).await?;
+
+    // Store in Redis (best-effort, don't fail if Redis is down)
+    if let Some(redis) = redis {
+        let mut conn = redis.clone();
+        let key = registry_cache_key(url);
+        if let Ok(json_str) = serde_json::to_string(&index) {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                conn.set_ex::<_, _, ()>(&key, json_str, REGISTRY_CACHE_TTL),
+            ).await;
+        }
+    }
+
+    Ok(index)
+}
+
+/// Invalidates the cached registry index for a given URL.
+pub async fn invalidate_index_cache(
+    url: &str,
+    redis: &Option<redis::aio::ConnectionManager>,
+) {
+    if let Some(redis) = redis {
+        let mut conn = redis.clone();
+        let key = registry_cache_key(url);
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            conn.del::<_, ()>(&key),
+        ).await;
+    }
+}
+
+/// Invalidates all cached registry indexes.
+pub async fn invalidate_all_index_cache(
+    redis: &Option<redis::aio::ConnectionManager>,
+) {
+    if let Some(redis) = redis {
+        let mut conn = redis.clone();
+        // Use SCAN to find and delete all registry:index:* keys
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            async {
+                let keys: Vec<String> = redis::cmd("KEYS")
+                    .arg("registry:index:*")
+                    .query_async(&mut conn)
+                    .await
+                    .unwrap_or_default();
+                if !keys.is_empty() {
+                    let _: () = redis::cmd("DEL")
+                        .arg(&keys)
+                        .query_async(&mut conn)
+                        .await
+                        .unwrap_or(());
+                }
+            },
+        ).await;
+    }
 }
 
 /// A fully downloaded module package.

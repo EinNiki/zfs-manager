@@ -120,7 +120,7 @@ async fn install_from_registry(
         return Err(ApiError::BadRequest("unknown registry".into()));
     }
 
-    let index = registry::fetch_index(&body.registry_url)
+    let index = registry::fetch_index_cached(&body.registry_url, &state.redis)
         .await
         .map_err(ApiError::BadRequest)?;
     let entry = index
@@ -139,6 +139,10 @@ async fn install_from_registry(
     let actor = actor_from_headers(&state, &headers).await;
     audit(&state, &actor, "module_installed", Some(&module_id),
           json!({ "version": version, "registry_url": body.registry_url })).await;
+
+    // Invalidate store cache so installed status updates
+    super::module_store::invalidate_store_cache_pub(&state).await;
+
     Ok(Json(json!({ "id": module_id, "version": version })))
 }
 
@@ -366,6 +370,10 @@ async fn uninstall(
 
     let actor = actor_from_headers(&state, &headers).await;
     audit(&state, &actor, "module_uninstalled", Some(&id), json!({})).await;
+
+    // Invalidate store cache so installed status updates
+    super::module_store::invalidate_store_cache_pub(&state).await;
+
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -572,7 +580,7 @@ async fn switch_version(
 
     // If we have a registry entry, re-fetch the manifest to pick up schema changes
     if let Some(ref reg_url) = registry_url {
-        if let Ok(index) = registry::fetch_index(reg_url).await {
+        if let Ok(index) = registry::fetch_index_cached(reg_url, &state.redis).await {
             if let Some(entry) = index.modules.iter().find(|m| m.id == id) {
                 if let Ok(fresh) = registry::fetch_manifest_only(entry).await {
                     manifest.config_schema = fresh.config_schema;

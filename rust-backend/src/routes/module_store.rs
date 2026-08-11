@@ -13,6 +13,9 @@ use crate::modules::github_cache;
 use crate::modules::registry;
 use crate::state::AppState;
 
+use sha2::Digest;
+use redis::AsyncCommands;
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/modules/store", get(store_listing))
@@ -73,7 +76,45 @@ pub async fn configured_registries(state: &AppState) -> Result<Vec<(i32, String,
     Ok(registries)
 }
 
+const STORE_CACHE_TTL: u64 = 120; // 2 minutes
+
+fn store_cache_key() -> &'static str {
+    "store:listing"
+}
+
 async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    // Try Redis cache for the full store listing first
+    if let Some(ref redis) = state.redis {
+        let mut conn = redis.clone();
+        if let Ok(cached) = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            conn.get::<_, Option<String>>(store_cache_key()),
+        ).await {
+            if let Ok(Some(json_str)) = cached {
+                if let Ok(val) = serde_json::from_str::<Value>(&json_str) {
+                    return Ok(Json(val));
+                }
+            }
+        }
+    }
+
+    let result = build_store_listing(&state).await?;
+
+    // Cache the result in Redis (best-effort)
+    if let Some(ref redis) = state.redis {
+        let mut conn = redis.clone();
+        if let Ok(json_str) = serde_json::to_string(&result) {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                conn.set_ex::<_, _, ()>(store_cache_key(), json_str, STORE_CACHE_TTL),
+            ).await;
+        }
+    }
+
+    Ok(Json(result))
+}
+
+async fn build_store_listing(state: &AppState) -> Result<Value, ApiError> {
     let pg = state.pg.as_ref().ok_or(ApiError::InternalError("database unavailable".into()))?;
     let installed_rows = pg
         .query("SELECT id, version FROM modules", &[])
@@ -86,12 +127,11 @@ async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, Api
 
     let mut entries = Vec::new();
     let mut errors = Vec::new();
-    for (_, url, _) in configured_registries(&state).await? {
-        match registry::fetch_index(&url).await {
+    for (_, url, _) in configured_registries(state).await? {
+        // Use cached registry index (5 min TTL in Redis)
+        match registry::fetch_index_cached(&url, &state.redis).await {
             Ok(index) => {
                 // Fetch latest release versions from the Redis-backed cache.
-                // No direct GitHub API calls here — the cache is populated by
-                // the background scheduler (every 6h) or the manual Refresh button.
                 let mut join_set = tokio::task::JoinSet::new();
                 for module in &index.modules {
                     let repo_url = module.repository_url.clone();
@@ -124,10 +164,10 @@ async fn store_listing(State(state): State<AppState>) -> Result<Json<Value>, Api
             Err(e) => errors.push(json!({ "registry_url": url, "error": e })),
         }
     }
-    Ok(Json(json!({ "modules": entries, "errors": errors })))
+    Ok(json!({ "modules": entries, "errors": errors }))
 }
 
-/// Manual refresh: invalidates all GitHub caches, re-fetches everything,
+/// Manual refresh: invalidates all caches, re-fetches everything,
 /// then returns the fresh store listing.
 async fn refresh_store(
     State(state): State<AppState>,
@@ -135,14 +175,30 @@ async fn refresh_store(
 ) -> Result<Json<Value>, ApiError> {
     mgmt_rate_limit(&state, &headers)?;
 
-    // Invalidate all cached GitHub data
+    // Invalidate all cached data: GitHub cache, registry indexes, store listing
     github_cache::invalidate_all(&state.redis).await;
+    registry::invalidate_all_index_cache(&state.redis).await;
+    invalidate_store_cache(&state).await;
 
     // Re-fetch all registry indexes and pre-warm the GitHub cache
     let registries = configured_registries(&state).await?;
     let mut all_repo_urls = Vec::new();
     for (_, url, _) in &registries {
-        if let Ok(index) = registry::fetch_index(url).await {
+        if let Ok(index) = registry::fetch_index(&url).await {
+            // Re-cache the fresh index
+            if let Ok(json_str) = serde_json::to_string(&index) {
+                if let Some(ref redis) = state.redis {
+                    let mut conn = redis.clone();
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_millis(200),
+                        conn.set_ex::<_, _, ()>(
+                            &format!("registry:index:{}", hex::encode(sha2::Sha256::digest(url.as_bytes()))),
+                            json_str,
+                            300,
+                        ),
+                    ).await;
+                }
+            }
             for m in &index.modules {
                 all_repo_urls.push(m.repository_url.clone());
             }
@@ -150,8 +206,37 @@ async fn refresh_store(
     }
     github_cache::refresh_all(&state.redis, &all_repo_urls).await;
 
-    // Now return the fresh store listing (will hit the freshly-warmed cache)
-    store_listing(State(state)).await
+    // Build and return the fresh store listing
+    let result = build_store_listing(&state).await?;
+
+    // Cache the fresh result
+    if let Some(ref redis) = state.redis {
+        let mut conn = redis.clone();
+        if let Ok(json_str) = serde_json::to_string(&result) {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                conn.set_ex::<_, _, ()>(store_cache_key(), json_str, STORE_CACHE_TTL),
+            ).await;
+        }
+    }
+
+    Ok(Json(result))
+}
+
+/// Invalidates the cached store listing.
+pub async fn invalidate_store_cache(state: &AppState) {
+    if let Some(ref redis) = state.redis {
+        let mut conn = redis.clone();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            conn.del::<_, ()>(store_cache_key()),
+        ).await;
+    }
+}
+
+/// Public alias for cross-module calls.
+pub async fn invalidate_store_cache_pub(state: &AppState) {
+    invalidate_store_cache(state).await;
 }
 
 async fn list_registries(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -383,6 +468,10 @@ async fn add_registry(
 
     let actor = actor_from_headers(&state, &headers).await;
     audit(&state, &actor, "registry_added", None, json!({ "url": url })).await;
+
+    // Invalidate caches so the new registry shows up immediately
+    invalidate_store_cache(&state).await;
+
     Ok(Json(json!({ "id": id, "url": url })))
 }
 
@@ -407,6 +496,11 @@ async fn remove_registry(
 
     let actor = actor_from_headers(&state, &headers).await;
     audit(&state, &actor, "registry_removed", None, json!({ "url": url })).await;
+
+    // Invalidate caches so the removed registry disappears immediately
+    registry::invalidate_index_cache(&url, &state.redis).await;
+    invalidate_store_cache(&state).await;
+
     Ok(Json(json!({ "ok": true })))
 }
 
