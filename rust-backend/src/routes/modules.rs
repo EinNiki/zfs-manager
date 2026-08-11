@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use super::module_store::mgmt_rate_limit;
 use crate::error::ApiError;
 use crate::modules::audit::{actor_from_headers, audit};
+use crate::modules::github_cache;
 use crate::modules::manifest::{Manifest, MAX_WASM_BYTES};
 use crate::modules::registry;
 use crate::modules::runner::{execute_module, parse_schedule};
@@ -636,8 +637,9 @@ async fn switch_version(
 
     let auth = crate::modules::github_token::auth_header().await;
     tracing::info!("switch_version: auth header present: {}", auth.is_some());
-    let mut current_url = wasm_url;
+    let mut current_url = wasm_url.clone();
     let wasm: Vec<u8>;
+    let mut tried_api_fallback = false;
 
     loop {
         let mut wasm_req = client.get(&current_url);
@@ -649,10 +651,14 @@ async fn switch_version(
             if let Some((ref k, ref v)) = auth {
                 wasm_req = wasm_req.header(k, v);
             }
+            // For GitHub API asset endpoints, we need Accept: octet-stream
+            if host == "api.github.com" {
+                wasm_req = wasm_req.header("Accept", "application/octet-stream");
+            }
         }
         tracing::info!(
-            "switch_version: downloading wasm from {} (host={}, auth={}, token_set={})",
-            current_url, host, is_github && auth.is_some(), auth.is_some()
+            "switch_version: downloading wasm from {} (host={}, auth={})",
+            current_url, host, is_github && auth.is_some()
         );
         let wasm_resp = wasm_req.send().await
             .map_err(|e| ApiError::BadRequest(format!("failed to download wasm: {e}")))?;
@@ -676,6 +682,18 @@ async fn switch_version(
             } else {
                 parsed.join(&location).map(|u| u.to_string()).unwrap_or(location)
             };
+        } else if status.as_u16() == 404 && !tried_api_fallback {
+            // For private repos, the github.com/.../releases/download/... URL
+            // doesn't work with Bearer token auth. Fall back to the GitHub API
+            // asset endpoint which does work with token auth.
+            tried_api_fallback = true;
+            tracing::info!("switch_version: got 404, trying GitHub API asset endpoint fallback");
+            let _ = wasm_resp.text().await; // drain body
+            if let Some(api_url) = github_cache::resolve_github_asset_api_url(&wasm_url, &auth).await {
+                current_url = api_url;
+                continue;
+            }
+            return Err(ApiError::BadRequest(format!("wasm download returned 404 and API fallback failed (url: {})", wasm_url)));
         } else {
             // Log response body for debugging
             let body_text = wasm_resp.text().await.unwrap_or_default();

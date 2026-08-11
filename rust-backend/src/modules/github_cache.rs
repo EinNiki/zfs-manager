@@ -66,6 +66,86 @@ pub fn parse_github_repo(url: &str) -> Option<(String, String)> {
     Some((owner, repo))
 }
 
+/// Parses a GitHub release download URL like:
+///   https://github.com/{owner}/{repo}/releases/download/{tag}/{asset_name}
+/// Returns (owner, repo, tag, asset_name) if it matches, None otherwise.
+pub fn parse_github_release_download_url(url: &str) -> Option<(String, String, String, String)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if parsed.host_str() != Some("github.com") {
+        return None;
+    }
+    let segments: Vec<&str> = parsed.path_segments().map(|c| c.collect()).unwrap_or_default();
+    // Expected: [owner, repo, "releases", "download", tag, asset_name]
+    if segments.len() != 6 || segments[2] != "releases" || segments[3] != "download" {
+        return None;
+    }
+    Some((
+        segments[0].to_string(),
+        segments[1].to_string(),
+        segments[4].to_string(),
+        segments[5].to_string(),
+    ))
+}
+
+/// Resolves a GitHub release download URL to the API asset download endpoint.
+/// For private repos, the `github.com/.../releases/download/...` URL doesn't
+/// work with Bearer token auth. Instead, we use the API:
+///   1. GET /repos/{owner}/{repo}/releases/tags/{tag} → find asset by name
+///   2. Return the asset's API URL for download with Accept: octet-stream
+///
+/// Returns None if the URL is not a GitHub release download URL or if the
+/// API call fails.
+pub async fn resolve_github_asset_api_url(
+    download_url: &str,
+    auth_header: &Option<(String, String)>,
+) -> Option<String> {
+    let (owner, repo, tag, asset_name) = parse_github_release_download_url(download_url)?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("ZFS-Dashboard")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .ok()?;
+
+    let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}");
+    let mut req = client.get(&api_url);
+    if let Some((ref k, ref v)) = auth_header {
+        req = req.header(k, v);
+    }
+
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        tracing::warn!(
+            "resolve_github_asset_api_url: API call to {} returned {}",
+            api_url, resp.status()
+        );
+        return None;
+    }
+
+    let release: serde_json::Value = resp.json().await.ok()?;
+    let assets = release.get("assets").and_then(|v| v.as_array())?;
+
+    for asset in assets {
+        let name = asset.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name == asset_name {
+            // The "url" field is the API endpoint for downloading the asset
+            if let Some(url) = asset.get("url").and_then(|v| v.as_str()) {
+                tracing::info!(
+                    "resolve_github_asset_api_url: found asset {} → API URL: {}",
+                    asset_name, url
+                );
+                return Some(url.to_string());
+            }
+        }
+    }
+
+    tracing::warn!(
+        "resolve_github_asset_api_url: asset {} not found in release {}",
+        asset_name, tag
+    );
+    None
+}
+
 /// Fetches the latest release tag_name for a GitHub repo.
 /// CACHE-ONLY: reads from Redis or in-memory cache. Never calls GitHub API
 /// directly — the background scheduler populates the cache periodically.

@@ -95,8 +95,9 @@ async fn reject_internal_target(url: &reqwest::Url) -> Result<(), String> {
 async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result<Vec<u8>, String> {
     let auth = crate::modules::github_token::auth_header().await;
     let mut current_url = url.to_string();
+    let mut tried_api_fallback = false;
 
-    for _ in 0..5 {
+    for _ in 0..6 {
         let parsed = reqwest::Url::parse(&current_url)
             .map_err(|e| format!("invalid url {current_url:?}: {e}"))?;
         if !matches!(parsed.scheme(), "http" | "https") {
@@ -108,9 +109,14 @@ async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result
         // Add GitHub auth for github.com / raw.githubusercontent.com /
         // objects.githubusercontent.com (release asset CDN)
         let host = parsed.host_str().unwrap_or("");
-        if host.ends_with("github.com") || host.ends_with("githubusercontent.com") {
+        let is_github = host.ends_with("github.com") || host.ends_with("githubusercontent.com");
+        if is_github {
             if let Some((ref k, ref v)) = auth {
                 request = request.header(k, v);
+            }
+            // For GitHub API asset endpoints, need Accept: octet-stream
+            if host == "api.github.com" {
+                request = request.header("Accept", "application/octet-stream");
             }
         }
 
@@ -145,6 +151,16 @@ async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result
                     .map(|u| u.to_string())
                     .unwrap_or(location);
             }
+        } else if response.status().as_u16() == 404 && !tried_api_fallback {
+            // For private repos, the github.com/.../releases/download/... URL
+            // doesn't work with Bearer token auth. Fall back to the GitHub API.
+            tried_api_fallback = true;
+            let _ = response.text().await; // drain body
+            if let Some(api_url) = crate::modules::github_cache::resolve_github_asset_api_url(url, &auth).await {
+                current_url = api_url;
+                continue;
+            }
+            return Err(format!("fetch {url} failed: HTTP 404 and API fallback failed"));
         } else {
             return Err(format!("fetch {current_url} failed: HTTP {}", response.status()));
         }
