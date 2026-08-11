@@ -597,26 +597,51 @@ async fn switch_version(
     manifest.version = body.version.clone();
 
     // Download the new WASM
+    // Use redirect::Policy::none() so we can preserve the Authorization
+    // header across GitHub's cross-host redirects (github.com → objects.githubusercontent.com)
     let client = reqwest::Client::builder()
         .user_agent("ZFS-Dashboard")
         .timeout(std::time::Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
-    let mut wasm_req = client.get(&body.wasm_url);
-    // Add GitHub auth for private repo release assets
-    if body.wasm_url.contains("github.com") {
-        if let Some((k, v)) = crate::modules::github_token::auth_header().await {
-            wasm_req = wasm_req.header(k, v);
+    let auth = crate::modules::github_token::auth_header().await;
+    let mut current_url = body.wasm_url.clone();
+    let wasm: Vec<u8>;
+
+    loop {
+        let mut wasm_req = client.get(&current_url);
+        let parsed = reqwest::Url::parse(&current_url)
+            .map_err(|e| ApiError::BadRequest(format!("invalid wasm url: {e}")))?;
+        let host = parsed.host_str().unwrap_or("");
+        if host.ends_with("github.com") || host.ends_with("githubusercontent.com") {
+            if let Some((ref k, ref v)) = auth {
+                wasm_req = wasm_req.header(k, v);
+            }
+        }
+        let wasm_resp = wasm_req.send().await
+            .map_err(|e| ApiError::BadRequest(format!("failed to download wasm: {e}")))?;
+
+        if wasm_resp.status().is_success() {
+            wasm = wasm_resp.bytes().await
+                .map_err(|e| ApiError::BadRequest(format!("failed to read wasm: {e}")))?
+                .to_vec();
+            break;
+        } else if wasm_resp.status().is_redirection() {
+            let location = wasm_resp.headers().get("location")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .ok_or_else(|| ApiError::BadRequest("wasm download: redirect without location".to_string()))?;
+            current_url = if location.starts_with("http://") || location.starts_with("https://") {
+                location
+            } else {
+                parsed.join(&location).map(|u| u.to_string()).unwrap_or(location)
+            };
+        } else {
+            return Err(ApiError::BadRequest(format!("wasm download returned {}", wasm_resp.status())));
         }
     }
-    let wasm_resp = wasm_req.send().await
-        .map_err(|e| ApiError::BadRequest(format!("failed to download wasm: {e}")))?;
-    if !wasm_resp.status().is_success() {
-        return Err(ApiError::BadRequest(format!("wasm download returned {}", wasm_resp.status())));
-    }
-    let wasm = wasm_resp.bytes().await
-        .map_err(|e| ApiError::BadRequest(format!("failed to read wasm: {e}")))?;
     if wasm.len() > MAX_WASM_BYTES {
         return Err(ApiError::BadRequest(format!("wasm exceeds {} bytes", MAX_WASM_BYTES)));
     }

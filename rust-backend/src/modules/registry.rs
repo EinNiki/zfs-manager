@@ -48,8 +48,13 @@ pub struct RegistryIndex {
 }
 
 fn registry_http() -> Result<reqwest::Client, String> {
+    // Disable auto-redirect so we can preserve the Authorization header
+    // across host changes (GitHub release assets redirect from github.com
+    // to objects.githubusercontent.com, and reqwest strips auth headers
+    // on cross-host redirects by default).
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())
 }
@@ -88,36 +93,63 @@ async fn reject_internal_target(url: &reqwest::Url) -> Result<(), String> {
 }
 
 async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result<Vec<u8>, String> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid url {url:?}: {e}"))?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(format!("unsupported scheme in {url:?}"));
-    }
-    reject_internal_target(&parsed).await?;
+    let auth = crate::modules::github_token::auth_header().await;
+    let mut current_url = url.to_string();
 
-    // Add GitHub auth header for github.com / raw.githubusercontent.com
-    // to support private repos and higher rate limits.
-    let mut request = client.get(parsed);
-    let host = url;
-    if host.contains("github.com") || host.contains("raw.githubusercontent.com") {
-        if let Some((k, v)) = crate::modules::github_token::auth_header().await {
-            request = request.header(k, v);
+    for _ in 0..5 {
+        let parsed = reqwest::Url::parse(&current_url)
+            .map_err(|e| format!("invalid url {current_url:?}: {e}"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(format!("unsupported scheme in {current_url:?}"));
+        }
+        reject_internal_target(&parsed).await?;
+
+        let mut request = client.get(parsed.as_str());
+        // Add GitHub auth for github.com / raw.githubusercontent.com /
+        // objects.githubusercontent.com (release asset CDN)
+        let host = parsed.host_str().unwrap_or("");
+        if host.ends_with("github.com") || host.ends_with("githubusercontent.com") {
+            if let Some((ref k, ref v)) = auth {
+                request = request.header(k, v);
+            }
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|_| format!("fetch {current_url} failed: Ungültige Registry-URL oder keine Verbindung möglich"))?;
+
+        if response.status().is_success() {
+            let mut body = Vec::new();
+            let mut response = response;
+            while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+                body.extend_from_slice(&chunk);
+                if body.len() > cap {
+                    return Err(format!("{current_url} exceeds {cap} bytes"));
+                }
+            }
+            return Ok(body);
+        } else if response.status().is_redirection() {
+            // Follow redirect manually, preserving auth header on next hop
+            let location = response
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .ok_or("redirect without location header")?;
+            // Handle relative redirects
+            if location.starts_with("http://") || location.starts_with("https://") {
+                current_url = location;
+            } else {
+                current_url = parsed.join(&location)
+                    .map(|u| u.to_string())
+                    .unwrap_or(location);
+            }
+        } else {
+            return Err(format!("fetch {current_url} failed: HTTP {}", response.status()));
         }
     }
-
-    let mut response = request
-        .send()
-        .await
-        .map_err(|_| format!("fetch {url} failed: Ungültige Registry-URL oder keine Verbindung möglich"))?
-        .error_for_status()
-        .map_err(|_| format!("fetch {url} failed: Ungültige Registry-URL oder keine gültige index.json Datei erkannt (HTTP-Fehler)"))?;
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        body.extend_from_slice(&chunk);
-        if body.len() > cap {
-            return Err(format!("{url} exceeds {cap} bytes"));
-        }
-    }
-    Ok(body)
+    Err("too many redirects".into())
 }
 
 /// Downloads and parses one registry index.
