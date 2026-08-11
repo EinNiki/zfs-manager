@@ -38,7 +38,7 @@ jobs:
           else
             BRANCH_NAME="$REF_NAME"
           fi
-          # Ersetzt / und andere Sonderzeichen durch - (wichtig für feature/xyz Branches)
+          # Replace / and other special characters with - (important for feature/xyz branches)
           CLEAN_BRANCH=$(echo "$BRANCH_NAME" | tr '/' '-' | sed 's/[^a-zA-Z0-9._-]/-/g')
           echo "branch=$CLEAN_BRANCH" >> $GITHUB_OUTPUT
 
@@ -78,7 +78,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # Pusht bei jedem Push. Bei PRs wird standardmäßig nur gebaut.
+          # Push on every push. For PRs, only build by default.
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

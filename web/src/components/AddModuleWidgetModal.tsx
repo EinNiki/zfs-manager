@@ -78,14 +78,14 @@ export default function AddModuleWidgetModal({ isOpen, onClose, onSelectWidget }
 
   return (
     <AnimatePresence>
-      <Modal title="Modul-Widget hinzufügen" onClose={onClose} maxWidth={560}>
+      <Modal title="Add module widget" onClose={onClose} maxWidth={560}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ position: 'relative' }}>
             <Search size={14} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
             <input
               type="text"
               className="input"
-              placeholder="Module oder Metriken suchen…"
+              placeholder="Search modules or metrics…"
               value={widgetSearch}
               onChange={e => setWidgetSearch(e.target.value)}
               style={{ paddingLeft: 34, width: '100%' }}
@@ -95,7 +95,7 @@ export default function AddModuleWidgetModal({ isOpen, onClose, onSelectWidget }
 
           {loading ? (
             <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', fontSize: 13 }}>
-              Module werden geladen…
+              Loading modules…
             </div>
           ) : totalAvailableWidgets === 0 ? (
             <div style={{
@@ -105,10 +105,10 @@ export default function AddModuleWidgetModal({ isOpen, onClose, onSelectWidget }
             }}>
               <Blocks size={28} color="var(--text-muted)" />
               <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                Keine Modul-Widgets verfügbar
+                No module widgets available
               </div>
               <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-muted)', maxWidth: 360, lineHeight: 1.5 }}>
-                Installiere Community-Module im Module Store, um eigene Grafiken, Stat-Karten und Visualisierungen hier einzubinden.
+                Install community modules in the Module Store to add custom charts, stat cards, and visualizations here.
               </div>
             </div>
           ) : (
@@ -127,7 +127,7 @@ export default function AddModuleWidgetModal({ isOpen, onClose, onSelectWidget }
 
                   {(!mod.widget_schema || mod.widget_schema.length === 0) ? (
                     <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic', padding: '4px 2px' }}>
-                      Keine Widgets im Manifest deklariert.
+                      No widgets declared in manifest.
                     </div>
                   ) : widgets.length === 0 ? null : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

@@ -120,10 +120,10 @@ const ModuleDatabaseSection = forwardRef<DatabaseSectionRef, { moduleId: string 
         </div>
         <div style={{ flex: 1, minWidth: 140 }}>
           <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
-            Datenbank
+            Database
           </div>
           <div style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
-            Eigene Datenbank-Anbindung für dieses Modul
+            Custom database connection for this module
           </div>
         </div>
         <div style={{ display: 'flex', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', flexShrink: 0 }}>
@@ -156,19 +156,19 @@ const ModuleDatabaseSection = forwardRef<DatabaseSectionRef, { moduleId: string 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <CheckCircle size={13} style={{ color: 'var(--success)', flexShrink: 0 }} />
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-secondary)', flex: 1, minWidth: 200 }}>
-            Internes <strong style={{ color: 'var(--text-primary)' }}>PostgreSQL</strong> (Standard) — dieses Modul speichert seine Daten in der eingebetteten Datenbank.
+            Internal <strong style={{ color: 'var(--text-primary)' }}>PostgreSQL</strong> (default) — this module stores its data in the embedded database.
           </span>
         </div>
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
             <div>
-              <label style={labelStyle}>IP-Adresse / Host *</label>
+              <label style={labelStyle}>IP address / Host *</label>
               <input
                 type="text"
                 value={form.host}
                 onChange={e => patchForm({ host: e.target.value })}
-                placeholder="z. B. 192.168.1.50"
+                placeholder="e.g. 192.168.1.50"
                 style={inputStyle}
               />
             </div>
@@ -194,18 +194,18 @@ const ModuleDatabaseSection = forwardRef<DatabaseSectionRef, { moduleId: string 
               />
             </div>
             <div>
-              <label style={labelStyle}>Passwort</label>
+              <label style={labelStyle}>Password</label>
               <input
                 type="password"
                 value={form.password}
                 onChange={e => patchForm({ password: e.target.value })}
-                placeholder={hasPassword ? '••••••••  (gespeichert)' : 'Passwort'}
+                placeholder={hasPassword ? '••••••••  (saved)' : 'Password'}
                 autoComplete="new-password"
                 style={inputStyle}
               />
             </div>
             <div>
-              <label style={labelStyle}>Datenbankname *</label>
+              <label style={labelStyle}>Database name *</label>
               <input
                 type="text"
                 value={form.database}
@@ -224,7 +224,7 @@ const ModuleDatabaseSection = forwardRef<DatabaseSectionRef, { moduleId: string 
               onClick={test}
             >
               {testing ? <Loader2 size={12} className="spin" /> : <Server size={12} />}
-              {testing ? 'Teste…' : 'Verbindung testen'}
+              {testing ? 'Testing…' : 'Test connection'}
             </button>
             {testResult && (
               <span style={{
@@ -238,7 +238,7 @@ const ModuleDatabaseSection = forwardRef<DatabaseSectionRef, { moduleId: string 
             )}
           </div>
           <div style={{ fontFamily: 'var(--font-ui)', fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            Das Passwort wird verschlüsselt (AES-256-GCM) gespeichert. Leer lassen, um das gespeicherte Passwort beizubehalten.
+            The password is stored encrypted (AES-256-GCM). Leave empty to keep the saved password.
           </div>
         </>
       )}

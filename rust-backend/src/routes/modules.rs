@@ -1018,7 +1018,7 @@ async fn test_module_database(
         Ok(Ok((client, connection))) => {
             tokio::spawn(async move { let _ = connection.await; });
             match client.simple_query("SELECT 1").await {
-                Ok(_) => Ok(Json(json!({ "ok": true, "message": "Verbindung erfolgreich" }))),
+                Ok(_) => Ok(Json(json!({ "ok": true, "message": "Connection successful" }))),
                 Err(e) => Ok(Json(json!({ "ok": false, "message": format!("Query failed: {e}") }))),
             }
         }

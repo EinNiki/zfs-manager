@@ -68,7 +68,7 @@ export default function ActiveModules() {
       setStoreModulesMap(map);
 
       if (forceRefresh && !silent) {
-        notify({ type: 'success', title: 'Active Modules', message: 'Module Cache erfolgreich aktualisiert.', toastOnly: true });
+        notify({ type: 'success', title: 'Active Modules', message: 'Module cache updated successfully.', toastOnly: true });
       }
     } catch (err) {
       notify({ type: 'error', title: 'Modules', message: `Failed to load modules: ${(err as Error).message}` });
@@ -178,7 +178,7 @@ export default function ActiveModules() {
                 style={{ paddingLeft: 34, width: '100%' }}
               />
             </div>
-            <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => reload(true)} disabled={loading} title="Cache leeren & Registries neu abfragen">
+            <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => reload(true)} disabled={loading} title="Clear cache & re-fetch registries">
               <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
             </button>
           </div>
@@ -348,9 +348,9 @@ export default function ActiveModules() {
       <AnimatePresence>
         {uninstallTarget && (
           <ConfirmDialog
-            title="Modul deinstallieren"
-            message={`Modul "${uninstallTarget.name}" wirklich deinstallieren? Konfiguration und Ausführungs-Verlauf werden gelöscht.`}
-            confirmLabel="Deinstallieren"
+            title="Uninstall module"
+            message={`Really uninstall module "${uninstallTarget.name}"? Configuration and run history will be deleted.`}
+            confirmLabel="Uninstall"
             variant="danger"
             onConfirm={confirmUninstall}
             onCancel={() => setUninstallTarget(null)}

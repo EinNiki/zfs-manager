@@ -236,11 +236,11 @@ export default function ModuleWidgetRenderer({
       <div style={{ flex: 1, width: '100%', minHeight: 0, marginTop: 4 }}>
         {loading && chartData.length === 0 ? (
           <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
-            Daten werden geladen…
+            Loading data…
           </div>
         ) : chartData.length === 0 ? (
           <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
-            Keine Metrik-Daten im gewählten Zeitraum verfügbar
+            No metric data available for the selected time range
           </div>
         ) : widgetType === 'bar' ? (
           <ResponsiveContainer width="100%" height="100%">

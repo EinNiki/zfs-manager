@@ -24,7 +24,7 @@ function formatVersion(version?: string): string {
 
 function formatRegistryError(error: string): string {
   if (error.includes('invalid registry index') || error.includes('expected value') || error.includes('syntax error')) {
-    return 'Ungültige Registry-URL: Keine gültige index.json Datei erkannt';
+    return 'Invalid registry URL: no valid index.json file detected';
   }
   return error;
 }
@@ -161,8 +161,8 @@ export default function ModuleStore() {
           type: errCount > 0 ? 'error' : 'success',
           title: 'Module Store',
           message: errCount > 0
-            ? `Aktualisiert: ${modCount} Module, ${errCount} Registry-Fehler`
-            : `Aktualisiert: ${modCount} Module geladen`,
+            ? `Updated: ${modCount} modules, ${errCount} registry errors`
+            : `Updated: ${modCount} modules loaded`,
         });
       }
 
@@ -320,7 +320,7 @@ export default function ModuleStore() {
       try {
         await api.addRegistry(urlToAdd);
         setNewRegistryUrl('');
-        notify({ type: 'success', title: 'Module Store', message: 'Registry hinzugefügt' });
+        notify({ type: 'success', title: 'Module Store', message: 'Registry added' });
         await reload(false, true);
       } catch (err) {
         notify({ type: 'error', title: 'Module Store', message: `Adding registry failed: ${(err as Error).message}` });
@@ -333,7 +333,7 @@ export default function ModuleStore() {
 
   const cancelDuplicateSelections = () => {
     if (pendingAddRegistryUrl) {
-      notify({ type: 'info', title: 'Module Store', message: 'Hinzufügen der Registry abgebrochen.' });
+      notify({ type: 'info', title: 'Module Store', message: 'Adding registry cancelled.' });
       setPendingAddRegistryUrl(null);
     }
     setShowDuplicateModal(false);
@@ -502,8 +502,8 @@ export default function ModuleStore() {
                 <AlertTriangle size={14} /> Duplicates ({duplicateGroups.length})
               </button>
             )}
-            <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => reload(false, true)} disabled={refreshing} title="Cache leeren & Registries neu abfragen">
-              <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> {refreshing ? 'Aktualisiere…' : 'Refresh'}
+            <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => reload(false, true)} disabled={refreshing} title="Clear cache & re-fetch registries">
+              <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh'}
             </button>
             {modules.filter(m => m.installed && isUpdateAvailable(m.installed_version, m.version)).length > 1 && (
               <button
@@ -640,7 +640,7 @@ export default function ModuleStore() {
                 Registries
               </h3>
               <p style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-muted)', margin: '2px 0 0' }}>
-                Quellen, aus denen Community-Module geladen werden
+                Sources from which community modules are loaded
               </p>
             </div>
             <span className="badge">{registries.length}</span>
@@ -797,7 +797,7 @@ export default function ModuleStore() {
                 <div style={{ display: 'flex', gap: 14, padding: '14px 16px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.16)', borderRadius: 8 }}>
                   <AlertTriangle size={18} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 2 }} />
                   <p style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                    Folgende Module sind in mehreren Registries enthalten. Wähle pro Modul aus, aus welcher Registry es bezogen werden soll:
+                    The following modules are present in multiple registries. Choose which registry each module should be sourced from:
                   </p>
                 </div>
 
@@ -864,7 +864,7 @@ export default function ModuleStore() {
                                 color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
                                 display: 'flex', alignItems: 'center', gap: 4
                               }}>
-                                {isSelected ? '✓ Ausgewählt' : 'Wählen'}
+                                {isSelected ? '✓ Selected' : 'Select'}
                               </span>
                             </div>
                             <div style={{
@@ -887,14 +887,14 @@ export default function ModuleStore() {
                     style={{ flex: 1 }}
                     onClick={cancelDuplicateSelections}
                   >
-                    Abbrechen
+                    Cancel
                   </button>
                   <button
                     className="btn btn-primary"
                     style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
                     onClick={confirmDuplicateSelections}
                   >
-                    {pendingAddRegistryUrl ? 'Auswahl übernehmen & Registry hinzufügen' : 'Auswahl übernehmen'}
+                    {pendingAddRegistryUrl ? 'Apply selection & add registry' : 'Apply selection'}
                   </button>
                 </div>
               </div>

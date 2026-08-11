@@ -80,18 +80,18 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
     try {
       await api.createCustomTab(newTabName.trim(), 'layout');
       setNewTabName('');
-      addToast(`Tab "${newTabName}" erstellt`, 'success');
+      addToast(`Tab "${newTabName}" created`, 'success');
       await load();
     } catch (err: any) {
-      addToast(err.message || 'Fehler beim Erstellen des Tabs', 'error');
+      addToast(err.message || 'Failed to create tab', 'error');
     }
   };
 
   const handleDeleteTab = (slug: string, tabName: string) => {
     setConfirmState({
-      title: 'Tab löschen',
-      message: `Tab "${tabName}" wirklich löschen? Das Layout und alle enthaltenen Widgets gehen verloren.`,
-      confirmLabel: 'Löschen',
+      title: 'Delete tab',
+      message: `Really delete tab "${tabName}"? The layout and all contained widgets will be lost.`,
+      confirmLabel: 'Delete',
       variant: 'danger',
       onConfirm: async () => {
         // Optimistic update: remove the tab from the nav layout immediately so
@@ -106,10 +106,10 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
         updateAndSaveLayout(nextLayout);
         try {
           await api.deleteCustomTab(slug);
-          addToast(`Tab "${tabName}" gelöscht`, 'success');
+          addToast(`Tab "${tabName}" deleted`, 'success');
           load(); // silent background re-sync
         } catch (err: any) {
-          addToast(err.message || 'Fehler beim Löschen des Tabs', 'error');
+          addToast(err.message || 'Failed to delete tab', 'error');
           load(); // restore consistent state on failure
         } finally {
           unmarkCustomTabDeleting(slug);
@@ -129,18 +129,18 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
     const nextLayout = [...layout, newCat];
     setNewCatName('');
     updateAndSaveLayout(nextLayout);
-    addToast(`Kategorie "${newCat.label}" hinzugefügt`, 'success');
+    addToast(`Category "${newCat.label}" added`, 'success');
   };
 
   const handleDeleteCategory = (catId: string, label: string) => {
     if (layout.length <= 1) {
-      addToast('Mindestens eine Kategorie muss erhalten bleiben.', 'error');
+      addToast('At least one category must remain.', 'error');
       return;
     }
     setConfirmState({
-      title: 'Kategorie löschen',
-      message: `Kategorie "${label}" löschen? Enthaltene Tabs werden in die erste Kategorie verschoben.`,
-      confirmLabel: 'Löschen',
+      title: 'Delete category',
+      message: `Delete category "${label}"? Contained tabs will be moved to the first category.`,
+      confirmLabel: 'Delete',
       variant: 'danger',
       onConfirm: () => {
         const targetCat = layout.find(c => c.id !== catId);
@@ -157,7 +157,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
         });
 
         updateAndSaveLayout(nextLayout);
-        addToast(`Kategorie "${label}" gelöscht`, 'success');
+        addToast(`Category "${label}" deleted`, 'success');
       },
     });
   };
@@ -171,14 +171,14 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
 
   const handleReset = () => {
     setConfirmState({
-      title: 'Navigation zurücksetzen',
-      message: 'Navigation auf Standardeinstellungen zurücksetzen? Eigene Kategorien und Reihenfolgen gehen verloren.',
-      confirmLabel: 'Zurücksetzen',
+      title: 'Reset navigation',
+      message: 'Reset navigation to default settings? Custom categories and orderings will be lost.',
+      confirmLabel: 'Reset',
       variant: 'primary',
       onConfirm: () => {
         resetNavLayout();
         load();
-        addToast('Navigation zurückgesetzt', 'success');
+        addToast('Navigation reset', 'success');
       },
     });
   };
@@ -273,7 +273,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
         {/* Create Tab */}
         <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <label style={{ ...labelStyle, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Zap size={14} color="var(--accent)" /> Neuen Tab erstellen
+            <Zap size={14} color="var(--accent)" /> Create new tab
           </label>
           <div style={{ display: 'flex', gap: 8 }}>
             <input
@@ -281,7 +281,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
               value={newTabName}
               onChange={e => setNewTabName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleCreateTab()}
-              placeholder="z. B. Immich Metrics"
+              placeholder="e.g. Immich Metrics"
               style={{ ...inputStyle, flex: 1 }}
             />
             <button
@@ -290,7 +290,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
               className="btn btn-primary"
               style={{ flexShrink: 0, height: 40 }}
             >
-              <Plus size={14} /> Tab erstellen
+              <Plus size={14} /> Create tab
             </button>
           </div>
         </div>
@@ -298,7 +298,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
         {/* Create Category */}
         <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <label style={{ ...labelStyle, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FolderPlus size={14} color="var(--accent)" /> Neue Navigations-Kategorie
+            <FolderPlus size={14} color="var(--accent)" /> New navigation category
           </label>
           <div style={{ display: 'flex', gap: 8 }}>
             <input
@@ -306,7 +306,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
               value={newCatName}
               onChange={e => setNewCatName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleAddCategory()}
-              placeholder="z. B. Media Metrics"
+              placeholder="e.g. Media Metrics"
               style={{ ...inputStyle, flex: 1 }}
             />
             <button
@@ -315,7 +315,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
               className="btn btn-secondary"
               style={{ flexShrink: 0, height: 40 }}
             >
-              <Plus size={14} /> Kategorie erstellen
+              <Plus size={14} /> Create category
             </button>
           </div>
         </div>
@@ -325,27 +325,27 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <h4 style={{ margin: 0, fontFamily: 'var(--font-ui)', fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
-            Sidebar-Navigation & Kategorien anpassen
+            Sidebar navigation & categories
           </h4>
           <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            Verschiebe Kategorien und Tabs ganz einfach per Drag & Drop (Ziehen mit der Maus). Änderungen werden sofort in der Sidebar übernommen!
+            Easily reorder categories and tabs via drag & drop. Changes are applied to the sidebar immediately!
           </span>
         </div>
         <button
           onClick={handleReset}
           className="btn btn-secondary"
           style={{ height: 32, padding: '0 12px', fontSize: 12, color: 'var(--text-muted)' }}
-          title="Zurücksetzen auf Standard-Layout"
+          title="Reset to default layout"
         >
-          <RotateCcw size={13} /> Standard wiederherstellen
+          <RotateCcw size={13} /> Restore default
         </button>
       </div>
 
       {/* Category List */}
       {loading ? (
-        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Lade Navigationsstruktur...</div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading navigation structure...</div>
       ) : layout.length === 0 ? (
-        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Keine Navigations-Kategorien vorhanden.</div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No navigation categories found.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {layout.map((cat, catIdx) => {
@@ -414,7 +414,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingCatId(cat.id); setEditingCatLabel(cat.label); }}
                           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex' }}
-                          title="Kategorie umbenennen"
+                          title="Rename category"
                         >
                           <Edit2 size={12} />
                         </button>
@@ -426,7 +426,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDeleteCategory(cat.id, cat.label); }}
                       style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', marginLeft: 6, opacity: 0.8 }}
-                      title="Kategorie löschen"
+                      title="Delete category"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -455,7 +455,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
                 >
                   {cat.items.length === 0 ? (
                     <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', padding: 8 }}>
-                      Keine Tabs in dieser Kategorie. Ziehe Tabs per Drag & Drop hierher.
+                      No tabs in this category. Drag tabs here via drag & drop.
                     </div>
                   ) : (
                     cat.items.map((item, itemIdx) => {
@@ -515,7 +515,7 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleDeleteTab(item.customSlug!, item.label); }}
                                 style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', marginLeft: 4 }}
-                                title="Tab löschen"
+                                title="Delete tab"
                               >
                                 <Trash2 size={13} />
                               </button>
@@ -834,7 +834,7 @@ function ModulesTab() {
             <XCircle size={14} style={{ color: 'var(--danger)' }} />
           )}
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-secondary)' }}>
-            {githubTokenConfigured ? 'Token hinterlegt' : 'Kein Token hinterlegt'}
+            {githubTokenConfigured ? 'Token configured' : 'No token configured'}
           </span>
         </div>
 
