@@ -56,6 +56,7 @@ export default function ModuleStore() {
   const [newRegistryUrl, setNewRegistryUrl] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [updatingAll, setUpdatingAll] = useState(false);
 
@@ -129,7 +130,13 @@ export default function ModuleStore() {
     setModules(result);
   };
 
+  const initialMount = React.useRef(true);
+
   const reload = async (isNewAdd = false, forceRefresh = false) => {
+    const isInitial = initialMount.current;
+    if (isInitial) initialMount.current = false;
+    const isManualRefresh = forceRefresh && !isNewAdd && !isInitial;
+    if (isManualRefresh) setRefreshing(true);
     setLoading(true);
     try {
       let store;
@@ -147,9 +154,17 @@ export default function ModuleStore() {
       setErrors(store.errors);
       setRawStoreModules(store.modules);
 
-      // if (forceRefresh) {
-      //   notify({ type: 'success', title: 'Module Store', message: 'Module Store Cache erfolgreich aktualisiert.', toastOnly: true });
-      // }
+      if (isManualRefresh) {
+        const modCount = store.modules.length;
+        const errCount = store.errors.length;
+        notify({
+          type: errCount > 0 ? 'error' : 'success',
+          title: 'Module Store',
+          message: errCount > 0
+            ? `Aktualisiert: ${modCount} Module, ${errCount} Registry-Fehler`
+            : `Aktualisiert: ${modCount} Module geladen`,
+        });
+      }
 
       // Detect duplicate modules across registries
       const grouped = new Map<string, StoreModule[]>();
@@ -193,6 +208,7 @@ export default function ModuleStore() {
       notify({ type: 'error', title: 'Module Store', message: `Failed to load: ${(err as Error).message}` });
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -484,8 +500,8 @@ export default function ModuleStore() {
                 <AlertTriangle size={14} /> Duplicates ({duplicateGroups.length})
               </button>
             )}
-            <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => reload(false, true)} disabled={loading} title="Cache leeren & Registries neu abfragen">
-              <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
+            <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => reload(false, true)} disabled={refreshing} title="Cache leeren & Registries neu abfragen">
+              <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> {refreshing ? 'Aktualisiere…' : 'Refresh'}
             </button>
             {modules.filter(m => m.installed && isUpdateAvailable(m.installed_version, m.version)).length > 1 && (
               <button
