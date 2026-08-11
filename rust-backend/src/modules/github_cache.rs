@@ -161,11 +161,14 @@ pub async fn get_latest_release(
     let rkey = redis_key_latest(&owner, &repo);
     let mkey = format!("latest:{owner}/{repo}");
 
-    // 1. Check Redis
+    // 1. Check Redis (with timeout to avoid hanging on slow Redis)
     if let Some(ref conn) = redis {
         let mut c = conn.clone();
-        if let Ok(val) = c.get::<_, Option<String>>(&rkey).await {
-            if let Some(v) = val {
+        if let Ok(val) = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            c.get::<_, Option<String>>(&rkey),
+        ).await {
+            if let Ok(Some(v)) = val {
                 return v;
             }
         }
@@ -195,11 +198,14 @@ pub async fn get_all_releases(
     let rkey = redis_key_releases(&owner, &repo);
     let mkey = format!("releases:{owner}/{repo}");
 
-    // 1. Check Redis
+    // 1. Check Redis (with timeout to avoid hanging on slow Redis)
     if let Some(ref conn) = redis {
         let mut c = conn.clone();
-        if let Ok(val) = c.get::<_, Option<String>>(&rkey).await {
-            if let Some(v) = val {
+        if let Ok(val) = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            c.get::<_, Option<String>>(&rkey),
+        ).await {
+            if let Ok(Some(v)) = val {
                 if let Ok(arr) = serde_json::from_str::<Vec<Value>>(&v) {
                     return arr;
                 }

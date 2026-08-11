@@ -183,13 +183,31 @@ async fn build_store_listing(state: &AppState) -> Result<Value, ApiError> {
         .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
         .collect();
 
+    // Fetch all registry indexes IN PARALLEL (was sequential — each registry
+    // added its full fetch latency on top of the previous one).
+    let registries = configured_registries(state).await?;
+    let mut idx_join = tokio::task::JoinSet::new();
+    for (_, url, _) in &registries {
+        let url = url.clone();
+        let redis = state.redis.clone();
+        idx_join.spawn(async move {
+            (url.clone(), registry::fetch_index_cached(&url, &redis).await)
+        });
+    }
+    let mut idx_results: Vec<(String, Result<registry::RegistryIndex, String>)> = Vec::new();
+    while let Some(res) = idx_join.join_next().await {
+        if let Ok(item) = res {
+            idx_results.push(item);
+        }
+    }
+
     let mut entries = Vec::new();
     let mut errors = Vec::new();
-    for (_, url, _) in configured_registries(state).await? {
-        // Use cached registry index (5 min TTL in Redis)
-        match registry::fetch_index_cached(&url, &state.redis).await {
+    for (url, idx_result) in idx_results {
+        match idx_result {
             Ok(index) => {
-                // Fetch latest release versions from the Redis-backed cache.
+                // Fetch latest release versions from the Redis-backed cache
+                // in parallel across all modules in this registry.
                 let mut join_set = tokio::task::JoinSet::new();
                 for module in &index.modules {
                     let repo_url = module.repository_url.clone();
@@ -238,11 +256,16 @@ async fn refresh_store(
     registry::invalidate_all_index_cache(&state.redis).await;
     invalidate_store_cache(&state).await;
 
-    // Re-fetch all registry indexes and pre-warm the GitHub cache
+    // Re-fetch all registry indexes IN PARALLEL and pre-warm the GitHub cache
     let registries = configured_registries(&state).await?;
-    let mut all_repo_urls = Vec::new();
+    let mut idx_join = tokio::task::JoinSet::new();
     for (_, url, _) in &registries {
-        if let Ok(index) = registry::fetch_index(&url).await {
+        let url = url.clone();
+        idx_join.spawn(async move { (url.clone(), registry::fetch_index(&url).await) });
+    }
+    let mut all_repo_urls = Vec::new();
+    while let Some(res) = idx_join.join_next().await {
+        if let Ok((url, Ok(index))) = res {
             // Re-cache the fresh index
             if let Ok(json_str) = serde_json::to_string(&index) {
                 if let Some(ref redis) = state.redis {
