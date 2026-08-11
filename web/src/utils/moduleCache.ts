@@ -3,8 +3,10 @@ import { StoreModule, ActiveModule } from '../types';
 
 const STORE_CACHE_KEY = 'zfs_module_store_cache';
 const ACTIVE_CACHE_KEY = 'zfs_active_modules_cache';
+const LATEST_RELEASE_CACHE_KEY = 'zfs_latest_release_cache';
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-const STORE_TTL_FOR_UPDATE_CHECK_MS = 30 * 1000; // 30 seconds — Active Modules reads from backend Redis cache
+const STORE_TTL_FOR_UPDATE_CHECK_MS = 5 * 60 * 1000; // 5 minutes — update badges don't need to be real-time
+const LATEST_RELEASE_TTL_MS = 30 * 60 * 1000; // 30 minutes — sidebar version check
 
 interface CacheEntry<T> {
   timestamp: number;
@@ -115,4 +117,32 @@ export async function getActiveModulesCached(forceRefresh = false): Promise<{ mo
 export function clearModuleCache(): void {
   localStorage.removeItem(STORE_CACHE_KEY);
   localStorage.removeItem(ACTIVE_CACHE_KEY);
+  localStorage.removeItem(LATEST_RELEASE_CACHE_KEY);
+}
+
+/// Cached version of api.getLatestRelease() — avoids hitting the backend
+/// on every page load. The backend endpoint is cache-only (no GitHub API
+/// call), but we still avoid unnecessary network round-trips.
+export async function getLatestReleaseCached(): Promise<{ tag_name: string }> {
+  try {
+    const raw = localStorage.getItem(LATEST_RELEASE_CACHE_KEY);
+    if (raw) {
+      const entry: CacheEntry<{ tag_name: string }> = JSON.parse(raw);
+      if (Date.now() - entry.timestamp < LATEST_RELEASE_TTL_MS) {
+        return entry.data;
+      }
+    }
+  } catch {
+    // Ignore cache parse error
+  }
+  const fresh = await api.getLatestRelease();
+  try {
+    localStorage.setItem(LATEST_RELEASE_CACHE_KEY, JSON.stringify({
+      timestamp: Date.now(),
+      data: fresh,
+    }));
+  } catch {
+    // Ignore storage errors
+  }
+  return fresh;
 }

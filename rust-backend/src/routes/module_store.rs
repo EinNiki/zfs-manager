@@ -134,7 +134,7 @@ pub async fn invalidate_registries_cache(state: &AppState) {
     }
 }
 
-const STORE_CACHE_TTL: u64 = 120; // 2 minutes
+const STORE_CACHE_TTL: u64 = 600; // 10 minutes — store listing rarely changes
 
 fn store_cache_key() -> &'static str {
     "store:listing"

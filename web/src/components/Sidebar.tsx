@@ -10,6 +10,7 @@ import {
 import { api } from '../api';
 import { CustomTab } from '../types';
 import { getNavLayout, syncCustomTabsToLayout, NavCategory } from '../utils/navStorage';
+import { getLatestReleaseCached } from '../utils/moduleCache';
 
 const ICON_MAP: Record<string, React.ComponentType<any>> = {
   LayoutDashboard,
@@ -74,7 +75,7 @@ export default function Sidebar({
   };
 
   useEffect(() => {
-    api.getLatestRelease()
+    getLatestReleaseCached()
       .then(d => { if (d?.tag_name) setGithubVersion(d.tag_name); })
       .catch(() => {});
 
