@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use tracing::{info, warn};
+use tracing::{info, warn, debug};
 
 use super::manifest::Manifest;
 use super::net::hosts_from_config_urls;
@@ -73,11 +73,33 @@ pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) ->
     // Effective allowlist: manifest entries + hosts of url-typed config values.
     let mut allowlist = manifest.permissions.network_allowlist.clone();
     allowlist.extend(hosts_from_config_urls(&config, &manifest.url_keys()));
+    debug!("module {module_id}: allowlist = {:?}", allowlist);
+    debug!("module {module_id}: config = {}", config);
 
     let wasm_path = registry::wasm_path(module_id).ok_or("invalid module id")?;
+    debug!("module {module_id}: wasm_path = {}", wasm_path);
+    // Check if the file exists before reading, so we can log a more
+    // helpful error message including the modules directory listing.
     let wasm = tokio::fs::read(&wasm_path)
         .await
-        .map_err(|e| format!("wasm artifact missing: {e}"))?;
+        .map_err(|e| {
+            let modules_dir = registry::modules_dir();
+            let files: Vec<String> = std::fs::read_dir(&modules_dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            warn!(
+                "module {module_id}: wasm artifact not found at {wasm_path}: {e}\n\
+                 modules_dir={modules_dir}\n\
+                 existing files={files:?}"
+            );
+            format!("wasm artifact missing: {e} (path: {wasm_path}, modules_dir: {modules_dir}, existing files: {files:?})")
+        })?;
+    debug!("module {module_id}: wasm loaded, {} bytes", wasm.len());
 
     let run_id: i64 = pg
         .query_one(

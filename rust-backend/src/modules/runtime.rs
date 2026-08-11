@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_postgres::Client;
-use tracing::{info, warn};
+use tracing::{info, warn, debug};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 
@@ -120,6 +120,9 @@ impl HostState {
         let parsed = net::check_allowlist(&url, &self.ctx.allowlist)?;
         net::reject_dangerous_ip(&parsed).await?;
 
+        let method_str = method.as_str().to_string();
+        debug!("module {}: {} {}", self.ctx.module_id, method_str, url);
+
         let mut request = self.http.request(method, parsed);
         // Inject internal auth token so the dashboard's own auth middleware
         // recognizes requests from the WASM sandbox and allows them through.
@@ -134,6 +137,9 @@ impl HostState {
         }
         let response = request.send().await.map_err(|e| format!("request failed: {e}"))?;
         let status = response.status().as_u16();
+        if status >= 400 {
+            warn!("module {}: {} {} → HTTP {}", self.ctx.module_id, method_str, url, status);
+        }
 
         let mut buf = Vec::new();
         let mut stream = response;

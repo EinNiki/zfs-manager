@@ -158,7 +158,17 @@ async fn auth_middleware(
             ).await;
         });
     }
-    warn!("Unauthorized access attempt from {ip}");
+    // Detailed debug logging for 401s — helps diagnose module auth issues
+    let has_x_api_key = req.headers().get("x-api-key").is_some();
+    let has_auth = req.headers().get("authorization").is_some();
+    let has_internal = req.headers().get("x-internal-module").is_some();
+    let ua = req.headers().get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("");
+    warn!(
+        "Unauthorized access attempt from {ip}: path={path}, method={}, \
+         x-api-key={has_x_api_key}, authorization={has_auth}, x-internal-module={has_internal}, \
+         user-agent={ua:?}",
+        req.method()
+    );
 
     Err(StatusCode::UNAUTHORIZED)
 }

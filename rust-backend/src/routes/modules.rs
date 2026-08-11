@@ -494,7 +494,10 @@ async fn trigger_run(
 
     let (run_id, outcome) = execute_module(&state, &id, "manual")
         .await
-        .map_err(ApiError::BadRequest)?;
+        .map_err(|e| {
+            tracing::warn!("module {id}: run failed: {e}");
+            ApiError::BadRequest(e)
+        })?;
     Ok(Json(json!({
         "run_id": run_id,
         "success": outcome.success,
