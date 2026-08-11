@@ -172,11 +172,10 @@ struct DiscoverRegistryBody {
 /// index.json / registry.json files and returns all that are valid.
 ///
 /// For a direct file URL (ends with .json), it just validates that one.
-/// For a GitHub repo URL, it tries common locations:
-///   - main branch: index.json, registry/index.json, registry.json
-///   - master branch: same three (fallback)
-/// For any other URL that doesn't end in .json, it tries appending
-/// index.json and registry/index.json.
+/// For a GitHub repo URL, it tries common locations on the `main` branch first.
+/// Only if nothing is found on `main`, it falls back to `master`.
+/// This avoids showing duplicate results when GitHub redirects non-existent
+/// branches to the default branch.
 ///
 /// Returns the found URLs along with their module data so the frontend
 /// can do duplicate checking without making cross-origin requests.
@@ -197,18 +196,84 @@ async fn discover_registry(
         return Err(ApiError::BadRequest("url must be http(s)".into()));
     }
 
-    // Build candidate URLs
-    let candidates = build_candidate_urls(&input, &parsed);
-
-    // Fetch all candidates in parallel, keep only valid ones
     let client = reqwest::Client::builder()
         .user_agent("ZFS-Dashboard")
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
+    // For GitHub repos, try main first, then master as fallback.
+    // For direct .json URLs and generic URLs, try all candidates at once.
+    let github_repo = if parsed.host_str() == Some("github.com") {
+        let segments: Vec<&str> = parsed.path_segments().map(|c| c.collect()).unwrap_or_default();
+        if segments.len() >= 2 {
+            Some((segments[0], segments[1].trim_end_matches(".git")))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut found: Vec<Value> = Vec::new();
+    let mut found_invalid: Vec<String> = Vec::new();
+    let mut candidates_checked = 0;
+
+    if let Some((owner, repo)) = github_repo {
+        if input.to_lowercase().ends_with(".json") {
+            // Direct .json URL on github.com — just check it
+            let candidates = vec![input.clone()];
+            candidates_checked += candidates.len();
+            fetch_candidates(&client, &candidates, &mut found, &mut found_invalid).await;
+        } else {
+            // Try main branch first
+            let paths = ["index.json", "registry/index.json", "registry.json"];
+            let main_urls: Vec<String> = paths
+                .iter()
+                .map(|p| format!("https://raw.githubusercontent.com/{owner}/{repo}/main/{p}"))
+                .collect();
+            candidates_checked += main_urls.len();
+            fetch_candidates(&client, &main_urls, &mut found, &mut found_invalid).await;
+
+            // Only try master if nothing was found on main
+            if found.is_empty() {
+                let master_urls: Vec<String> = paths
+                    .iter()
+                    .map(|p| format!("https://raw.githubusercontent.com/{owner}/{repo}/master/{p}"))
+                    .collect();
+                candidates_checked += master_urls.len();
+                fetch_candidates(&client, &master_urls, &mut found, &mut found_invalid).await;
+            }
+        }
+    } else {
+        // Non-GitHub URL
+        let candidates = build_candidate_urls(&input, &parsed);
+        candidates_checked += candidates.len();
+        fetch_candidates(&client, &candidates, &mut found, &mut found_invalid).await;
+    }
+
+    // Sort for stable ordering
+    found.sort_by_key(|f| f["url"].as_str().unwrap_or("").to_string());
+    found_invalid.sort();
+
+    Ok(Json(json!({
+        "input": input,
+        "candidates_checked": candidates_checked,
+        "found": found,
+        "invalid": found_invalid,
+    })))
+}
+
+/// Fetches a batch of candidate URLs in parallel and appends results to
+/// the `found` and `found_invalid` vectors.
+async fn fetch_candidates(
+    client: &reqwest::Client,
+    urls: &[String],
+    found: &mut Vec<Value>,
+    found_invalid: &mut Vec<String>,
+) {
     let mut join_set = tokio::task::JoinSet::new();
-    for url in &candidates {
+    for url in urls {
         let url = url.clone();
         let client = client.clone();
         join_set.spawn(async move {
@@ -228,8 +293,6 @@ async fn discover_registry(
         });
     }
 
-    let mut found: Vec<Value> = Vec::new();
-    let mut found_invalid: Vec<String> = Vec::new();
     while let Some(res) = join_set.join_next().await {
         if let Ok(Some((url, is_valid, data))) = res {
             if is_valid {
@@ -243,47 +306,17 @@ async fn discover_registry(
             }
         }
     }
-
-    // Sort for stable ordering
-    found.sort_by_key(|f| f["url"].as_str().unwrap_or("").to_string());
-    found_invalid.sort();
-
-    Ok(Json(json!({
-        "input": input,
-        "candidates_checked": candidates.len(),
-        "found": found,
-        "invalid": found_invalid,
-    })))
 }
 
-/// Builds a list of candidate index file URLs from the user input.
-fn build_candidate_urls(input: &str, parsed: &reqwest::Url) -> Vec<String> {
+/// Builds a list of candidate index file URLs for non-GitHub URLs.
+/// GitHub URLs are handled directly in `discover_registry` with branch fallback.
+fn build_candidate_urls(input: &str, _parsed: &reqwest::Url) -> Vec<String> {
     // If the URL already points to a .json file, just use it directly
     if input.to_lowercase().ends_with(".json") {
         return vec![input.to_string()];
     }
 
-    // GitHub repo URL → try raw.githubusercontent.com with common paths
-    if parsed.host_str() == Some("github.com") {
-        let segments: Vec<&str> = parsed.path_segments().map(|c| c.collect()).unwrap_or_default();
-        if segments.len() >= 2 {
-            let owner = segments[0];
-            let repo = segments[1].trim_end_matches(".git");
-            let branches = ["main", "master"];
-            let paths = ["index.json", "registry/index.json", "registry.json"];
-            let mut urls = Vec::new();
-            for branch in &branches {
-                for path in &paths {
-                    urls.push(format!(
-                        "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
-                    ));
-                }
-            }
-            return urls;
-        }
-    }
-
-    // Generic URL (not GitHub, not a .json file) → try appending common paths
+    // Generic URL → try appending common paths
     vec![
         format!("{input}/index.json"),
         format!("{input}/registry/index.json"),
