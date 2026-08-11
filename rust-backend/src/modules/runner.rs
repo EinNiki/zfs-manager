@@ -48,8 +48,25 @@ pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) ->
     }
     let secrets_blob: Option<Vec<u8>> = row.get(3);
 
+    // Check if the manifest has any secret fields. If not, we don't need
+    // to decrypt the blob at all — and if decryption fails (e.g. master key
+    // changed after restart), we can safely ignore stale secrets.
+    let has_secret_fields = manifest.config_schema.iter().any(|f| f.field_type == "secret");
+
     let secret_values: HashMap<String, String> = match secrets_blob {
-        Some(blob) => secrets::decrypt_secrets(&master_key.ok_or("secrets master key unavailable")?, &blob)?,
+        Some(blob) if has_secret_fields => {
+            secrets::decrypt_secrets(&master_key.ok_or("secrets master key unavailable")?, &blob)
+                .unwrap_or_else(|e| {
+                    warn!("module {module_id}: failed to decrypt secrets blob ({e}) — module has secret fields, using empty secrets");
+                    HashMap::new()
+                })
+        }
+        Some(_) => {
+            // Module has no secret fields but a stale blob exists — ignore it.
+            // Could clear it from DB here, but that's a write on every run;
+            // the next config save will overwrite it with an empty blob anyway.
+            HashMap::new()
+        }
         None => HashMap::new(),
     };
 
