@@ -93,8 +93,18 @@ async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result
         return Err(format!("unsupported scheme in {url:?}"));
     }
     reject_internal_target(&parsed).await?;
-    let mut response = client
-        .get(parsed)
+
+    // Add GitHub auth header for github.com / raw.githubusercontent.com
+    // to support private repos and higher rate limits.
+    let mut request = client.get(parsed);
+    let host = url;
+    if host.contains("github.com") || host.contains("raw.githubusercontent.com") {
+        if let Some((k, v)) = crate::modules::github_token::auth_header().await {
+            request = request.header(k, v);
+        }
+    }
+
+    let mut response = request
         .send()
         .await
         .map_err(|_| format!("fetch {url} failed: Ungültige Registry-URL oder keine Verbindung möglich"))?

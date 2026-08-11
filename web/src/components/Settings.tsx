@@ -635,8 +635,19 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
   const [githubSaving, setGithubSaving] = useState(false);
   const [githubSaved, setGithubSaved] = useState(false);
 
+  // GitHub token
+  const [githubToken, setGithubToken] = useState('');
+  const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
+  const [githubTokenMasked, setGithubTokenMasked] = useState<string | null>(null);
+  const [githubTokenSaving, setGithubTokenSaving] = useState(false);
+  const [githubTokenSaved, setGithubTokenSaved] = useState(false);
+
   useEffect(() => {
     api.getGithubInterval().then(r => setGithubHours(r.hours)).catch(() => {});
+    api.getGithubToken().then(r => {
+      setGithubTokenConfigured(r.configured);
+      setGithubTokenMasked(r.masked);
+    }).catch(() => {});
   }, []);
 
   const saveGithubInterval = async () => {
@@ -649,6 +660,25 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
       setTimeout(() => setGithubSaved(false), 3000);
     } catch { /* ignore */ }
     finally { setGithubSaving(false); }
+  };
+
+  const saveGithubToken = async () => {
+    setGithubTokenSaving(true);
+    setGithubTokenSaved(false);
+    try {
+      const r = await api.setGithubToken(githubToken);
+      setGithubTokenConfigured(r.configured);
+      setGithubToken('');
+      if (r.configured) {
+        const fresh = await api.getGithubToken();
+        setGithubTokenMasked(fresh.masked);
+      } else {
+        setGithubTokenMasked(null);
+      }
+      setGithubTokenSaved(true);
+      setTimeout(() => setGithubTokenSaved(false), 3000);
+    } catch { /* ignore */ }
+    finally { setGithubTokenSaving(false); }
   };
 
   const strength = (() => {
@@ -769,6 +799,62 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
         </div>
         <p style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', margin: '8px 0 0', lineHeight: 1.4 }}>
           Range: 1–168 hours. Lower values mean faster update detection but more GitHub API calls (rate limit: 60/hour unauthenticated).
+        </p>
+      </div>
+
+      {/* GitHub token */}
+      <div style={{ paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <Key size={16} style={{ color: 'var(--accent)' }} />
+          <div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+              GitHub Token
+            </div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              Personal Access Token for GitHub API auth. Increases rate limit from 60 to 5000 req/hour and enables private repo modules.
+            </div>
+          </div>
+        </div>
+
+        {githubTokenConfigured && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 12px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius)' }}>
+            <CheckCircle size={14} style={{ color: 'var(--green)' }} />
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)' }}>
+              Token set: {githubTokenMasked}
+            </span>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <input
+            type="password"
+            value={githubToken}
+            onChange={e => setGithubToken(e.target.value)}
+            placeholder={githubTokenConfigured ? 'Enter new token to replace…' : 'ghp_xxxxxxxxxxxx…'}
+            style={{ ...inputStyle, flex: 1, minWidth: 250, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+          />
+          <button
+            onClick={saveGithubToken}
+            disabled={githubTokenSaving || (!githubToken && !githubTokenConfigured)}
+            className="btn btn-primary"
+            style={{ height: 36, fontSize: 13, padding: '0 18px', opacity: (githubTokenSaving || (!githubToken && !githubTokenConfigured)) ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            {githubTokenSaving ? 'Saving…' : githubTokenSaved ? 'Saved!' : githubTokenConfigured ? 'Replace' : 'Save'}
+          </button>
+          {githubTokenConfigured && (
+            <button
+              onClick={() => { setGithubToken(''); saveGithubToken(); }}
+              disabled={githubTokenSaving}
+              className="btn btn-secondary"
+              style={{ height: 36, fontSize: 13, padding: '0 18px', color: 'var(--danger)' }}
+            >
+              Remove
+            </button>
+          )}
+        </div>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', margin: '8px 0 0', lineHeight: 1.4 }}>
+          Create a token at GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens.
+          Needs <code style={{ fontFamily: 'var(--font-mono)' }}>repo</code> scope for private repos, or just public read for rate limit increase.
         </p>
       </div>
     </div>

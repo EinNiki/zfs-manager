@@ -603,7 +603,14 @@ async fn switch_version(
         .build()
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
-    let wasm_resp = client.get(&body.wasm_url).send().await
+    let mut wasm_req = client.get(&body.wasm_url);
+    // Add GitHub auth for private repo release assets
+    if body.wasm_url.contains("github.com") {
+        if let Some((k, v)) = crate::modules::github_token::auth_header().await {
+            wasm_req = wasm_req.header(k, v);
+        }
+    }
+    let wasm_resp = wasm_req.send().await
         .map_err(|e| ApiError::BadRequest(format!("failed to download wasm: {e}")))?;
     if !wasm_resp.status().is_success() {
         return Err(ApiError::BadRequest(format!("wasm download returned {}", wasm_resp.status())));

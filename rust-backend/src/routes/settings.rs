@@ -17,6 +17,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/settings/api-keys/:id", delete(revoke_api_key))
         .route("/api/v1/settings/password",     post(change_password))
         .route("/api/v1/settings/github-interval", get(get_github_interval).put(set_github_interval))
+        .route("/api/v1/settings/github-token", get(get_github_token).put(set_github_token))
         .with_state(state)
 }
 
@@ -241,4 +242,45 @@ async fn set_github_interval(
     .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
     Ok(Json(json!({ "hours": hours })))
+}
+
+// ── GitHub token ─────────────────────────────────────────────────────────────
+
+/// GET /api/v1/settings/github-token
+/// Returns whether a GitHub token is configured (never returns the token itself).
+async fn get_github_token(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let _ = state; // AppState not needed — token is in global state
+    let token = crate::modules::github_token::get().await;
+    let configured = token.is_some();
+    // Return a masked prefix so the UI can show which token is set
+    let masked = token.map(|t| {
+        if t.len() <= 8 {
+            "••••".to_string()
+        } else {
+            format!("{}…{}", &t[..4], &t[t.len()-4..])
+        }
+    });
+    Ok(Json(json!({ "configured": configured, "masked": masked })))
+}
+
+#[derive(Deserialize)]
+struct SetGithubTokenBody {
+    token: String,
+}
+
+/// PUT /api/v1/settings/github-token
+/// Sets or clears the GitHub token. Pass empty string to clear.
+async fn set_github_token(
+    State(state): State<AppState>,
+    Json(body): Json<SetGithubTokenBody>,
+) -> Result<Json<Value>, ApiError> {
+    let pg = state.pg.as_ref().ok_or_else(|| ApiError::InternalError("Database unavailable".into()))?;
+    crate::modules::github_token::set(&body.token, Some(pg))
+        .await
+        .map_err(ApiError::InternalError)?;
+
+    let configured = !body.token.trim().is_empty();
+    Ok(Json(json!({ "configured": configured })))
 }

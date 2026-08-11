@@ -407,6 +407,8 @@ async fn main() {
         let _ = pg
             .execute("DELETE FROM module_registries WHERE is_default = TRUE", &[])
             .await;
+        // Load GitHub token from DB or env var for API auth + private repos
+        modules::github_token::init(Some(pg)).await;
     }
 
     let app_state = AppState {

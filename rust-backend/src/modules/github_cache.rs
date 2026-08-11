@@ -200,6 +200,8 @@ pub async fn refresh_all(
         }
     };
 
+    let auth = crate::modules::github_token::auth_header().await;
+
     for url in repo_urls {
         let Some((owner, repo)) = parse_github_repo(url) else {
             errors.push((url.clone(), "not a valid GitHub repo URL".into()));
@@ -208,7 +210,11 @@ pub async fn refresh_all(
 
         // 1. Fetch latest release
         let latest_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-        match client.get(&latest_url).send().await {
+        let mut req = client.get(&latest_url);
+        if let Some((ref k, ref v)) = auth {
+            req = req.header(k, v);
+        }
+        match req.send().await {
             Ok(r) if r.status().is_success() => {
                 let json: Value = r.json().await.unwrap_or(json!({}));
                 let tag = json
@@ -247,7 +253,11 @@ pub async fn refresh_all(
 
         // 2. Fetch ALL releases (full re-index, not incremental)
         let releases_url = format!("https://api.github.com/repos/{owner}/{repo}/releases");
-        match client.get(&releases_url).send().await {
+        let mut req = client.get(&releases_url);
+        if let Some((ref k, ref v)) = auth {
+            req = req.header(k, v);
+        }
+        match req.send().await {
             Ok(r) if r.status().is_success() => {
                 let releases_raw: Vec<Value> = r.json().await.unwrap_or_default();
                 let releases: Vec<Value> = releases_raw

@@ -151,6 +151,15 @@ export const api = {
       body: JSON.stringify({ hours }),
     }),
 
+  getGithubToken: () =>
+    request<{ configured: boolean; masked: string | null }>('/settings/github-token'),
+
+  setGithubToken: (token: string) =>
+    request<{ configured: boolean }>('/settings/github-token', {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
+
   // ── Per-module database settings ───────────────────────────────────────────
   getModuleDatabase: (id: string) =>
     request<ModuleDbSettings>(`/modules/${encodeURIComponent(id)}/database`),
