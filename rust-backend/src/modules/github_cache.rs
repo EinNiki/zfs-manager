@@ -178,10 +178,13 @@ pub async fn invalidate_all(redis: &Option<redis::aio::ConnectionManager>) {
 /// paths read from cache only.
 /// Re-indexes ALL releases from scratch (not incremental) so deleted
 /// releases are removed from the cache.
+/// Returns a list of (repo_url, error_message) for repos that failed.
 pub async fn refresh_all(
     redis: &Option<redis::aio::ConnectionManager>,
     repo_urls: &[String],
-) {
+) -> Vec<(String, String)> {
+    let mut errors = Vec::new();
+
     let client = match reqwest::Client::builder()
         .user_agent("ZFS-Dashboard")
         .timeout(Duration::from_secs(15))
@@ -190,12 +193,16 @@ pub async fn refresh_all(
         Ok(c) => c,
         Err(e) => {
             warn!("github_cache: failed to build HTTP client: {e}");
-            return;
+            for url in repo_urls {
+                errors.push((url.clone(), format!("HTTP client build failed: {e}")));
+            }
+            return errors;
         }
     };
 
     for url in repo_urls {
         let Some((owner, repo)) = parse_github_repo(url) else {
+            errors.push((url.clone(), "not a valid GitHub repo URL".into()));
             continue;
         };
 
@@ -221,7 +228,21 @@ pub async fn refresh_all(
                     debug!("github_cache: refreshed latest release for {owner}/{repo}: {tag}");
                 }
             }
-            _ => warn!("github_cache: failed to fetch latest release for {owner}/{repo}"),
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                let msg = if status.as_u16() == 403 && body.contains("rate limit") {
+                    "GitHub API rate limit exceeded (60/hour for unauthenticated). Wait or set GITHUB_TOKEN.".to_string()
+                } else {
+                    format!("GitHub API returned HTTP {status}: {body}")
+                };
+                warn!("github_cache: failed to fetch latest release for {owner}/{repo}: {msg}");
+                errors.push((url.clone(), msg));
+            }
+            Err(e) => {
+                warn!("github_cache: failed to fetch latest release for {owner}/{repo}: {e}");
+                errors.push((url.clone(), format!("network error: {e}")));
+            }
         }
 
         // 2. Fetch ALL releases (full re-index, not incremental)
@@ -271,8 +292,28 @@ pub async fn refresh_all(
                 mem_set(&mkey, &serialized);
                 debug!("github_cache: refreshed {} releases for {owner}/{repo}", releases.len());
             }
-            _ => warn!("github_cache: failed to fetch releases for {owner}/{repo}"),
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                let msg = if status.as_u16() == 403 && body.contains("rate limit") {
+                    "GitHub API rate limit exceeded".to_string()
+                } else {
+                    format!("GitHub API returned HTTP {status}")
+                };
+                warn!("github_cache: failed to fetch releases for {owner}/{repo}: {msg}");
+                // Only add error if latest release also failed (avoid duplicate errors)
+                if !errors.iter().any(|(u, _)| u == url) {
+                    errors.push((url.clone(), msg));
+                }
+            }
+            Err(e) => {
+                warn!("github_cache: failed to fetch releases for {owner}/{repo}: {e}");
+                if !errors.iter().any(|(u, _)| u == url) {
+                    errors.push((url.clone(), format!("network error: {e}")));
+                }
+            }
         }
     }
-    debug!("github_cache: background refresh complete for {} repos", repo_urls.len());
+    debug!("github_cache: background refresh complete for {} repos, {} errors", repo_urls.len(), errors.len());
+    errors
 }

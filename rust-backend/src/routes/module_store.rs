@@ -204,10 +204,19 @@ async fn refresh_store(
             }
         }
     }
-    github_cache::refresh_all(&state.redis, &all_repo_urls).await;
+    let gh_errors = github_cache::refresh_all(&state.redis, &all_repo_urls).await;
 
     // Build and return the fresh store listing
-    let result = build_store_listing(&state).await?;
+    let mut result = build_store_listing(&state).await?;
+
+    // Include GitHub API errors in the response so the frontend can show them
+    if !gh_errors.is_empty() {
+        if let Some(errors_arr) = result.get_mut("errors").and_then(|v| v.as_array_mut()) {
+            for (url, err) in gh_errors {
+                errors_arr.push(json!({ "registry_url": url, "error": err }));
+            }
+        }
+    }
 
     // Cache the fresh result
     if let Some(ref redis) = state.redis {

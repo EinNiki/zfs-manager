@@ -99,7 +99,13 @@ async fn refresh_github_cache(state: &AppState) {
         }
     }
 
-    github_cache::refresh_all(&state.redis, &repo_urls).await;
+    let gh_errors = github_cache::refresh_all(&state.redis, &repo_urls).await;
+    if !gh_errors.is_empty() {
+        warn!("GitHub cache refresh had {} errors:", gh_errors.len());
+        for (url, err) in &gh_errors {
+            warn!("  {url}: {err}");
+        }
+    }
 
     // Also invalidate and rebuild the store listing cache
     crate::routes::module_store::invalidate_store_cache(state).await;
