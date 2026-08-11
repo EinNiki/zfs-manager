@@ -87,28 +87,41 @@ pub fn parse_github_release_download_url(url: &str) -> Option<(String, String, S
     ))
 }
 
-/// Resolves a GitHub release download URL to the API asset download endpoint.
-/// For private repos, the `github.com/.../releases/download/...` URL doesn't
-/// work with Bearer token auth. Instead, we use the API:
-///   1. GET /repos/{owner}/{repo}/releases/tags/{tag} → find asset by name
-///   2. Return the asset's API URL for download with Accept: octet-stream
+/// Downloads a GitHub release asset for a private repo in a single function.
 ///
-/// Returns None if the URL is not a GitHub release download URL or if the
-/// API call fails.
-pub async fn resolve_github_asset_api_url(
+/// For private repos, the `github.com/.../releases/download/...` URL doesn't
+/// work with Bearer token auth. Instead, we use the GitHub API:
+///   1. GET /repos/{owner}/{repo}/releases/tags/{tag} with Accept: application/vnd.github+json
+///      → find the asset ID by matching the asset name
+///   2. GET /repos/{owner}/{repo}/releases/assets/{asset_id} with Accept: application/octet-stream
+///      → GitHub returns a 302 redirect to a pre-signed URL on objects.githubusercontent.com
+///   3. Follow the redirect manually (preserving auth on GitHub hosts, checking SSRF)
+///   4. Download the binary content
+///
+/// Doing both API calls in one function avoids GitHub's secondary rate limit
+/// which triggers when multiple rapid API calls are made from separate contexts.
+///
+/// Returns the downloaded bytes, or None if anything fails.
+pub async fn download_github_asset(
     download_url: &str,
     auth_header: &Option<(String, String)>,
-) -> Option<String> {
+    max_bytes: usize,
+) -> Option<Vec<u8>> {
     let (owner, repo, tag, asset_name) = parse_github_release_download_url(download_url)?;
 
+    // Client with redirects disabled so we can preserve the Authorization
+    // header across GitHub's cross-host redirects (api.github.com → objects.githubusercontent.com)
     let client = reqwest::Client::builder()
         .user_agent("ZFS-Dashboard")
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .ok()?;
 
+    // Step 1: Get release metadata to find the asset ID
     let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}");
-    let mut req = client.get(&api_url);
+    let mut req = client.get(&api_url)
+        .header("Accept", "application/vnd.github+json");
     if let Some((ref k, ref v)) = auth_header {
         req = req.header(k, v);
     }
@@ -116,7 +129,7 @@ pub async fn resolve_github_asset_api_url(
     let resp = req.send().await.ok()?;
     if !resp.status().is_success() {
         tracing::warn!(
-            "resolve_github_asset_api_url: API call to {} returned {}",
+            "download_github_asset: API metadata call to {} returned {}",
             api_url, resp.status()
         );
         return None;
@@ -125,24 +138,84 @@ pub async fn resolve_github_asset_api_url(
     let release: serde_json::Value = resp.json().await.ok()?;
     let assets = release.get("assets").and_then(|v| v.as_array())?;
 
-    for asset in assets {
-        let name = asset.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let asset_id = assets.iter().find_map(|a| {
+        let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
         if name == asset_name {
-            // The "url" field is the API endpoint for downloading the asset
-            if let Some(url) = asset.get("url").and_then(|v| v.as_str()) {
-                tracing::info!(
-                    "resolve_github_asset_api_url: found asset {} → API URL: {}",
-                    asset_name, url
-                );
-                return Some(url.to_string());
+            a.get("id").and_then(|v| v.as_u64())
+        } else {
+            None
+        }
+    })?;
+
+    tracing::info!(
+        "download_github_asset: found asset {} (id={}) in release {}",
+        asset_name, asset_id, tag
+    );
+
+    // Step 2: Download the asset binary via the API asset endpoint
+    let asset_api_url = format!(
+        "https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset_id}"
+    );
+
+    let mut current_url = asset_api_url;
+    for _ in 0..6 {
+        let parsed = reqwest::Url::parse(&current_url).ok()?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return None;
+        }
+
+        // SSRF protection: reject internal/private network targets
+        let host = parsed.host_str().unwrap_or("");
+        if host.ends_with("github.com") || host.ends_with("githubusercontent.com") {
+            // GitHub hosts are always allowed
+        } else {
+            // Non-GitHub redirect target — reject for safety
+            tracing::warn!("download_github_asset: refusing non-GitHub redirect to {}", host);
+            return None;
+        }
+
+        let mut req = client.get(parsed.as_str());
+        // Add auth for all GitHub hosts
+        if let Some((ref k, ref v)) = auth_header {
+            req = req.header(k, v);
+        }
+        // API asset endpoint needs octet-stream to return binary (otherwise returns JSON metadata)
+        if host == "api.github.com" {
+            req = req.header("Accept", "application/octet-stream");
+        }
+
+        let resp = req.send().await.ok()?;
+        let status = resp.status();
+
+        if status.is_success() {
+            let bytes = resp.bytes().await.ok()?;
+            if bytes.len() > max_bytes {
+                tracing::warn!("download_github_asset: asset {} exceeds {} bytes", asset_name, max_bytes);
+                return None;
             }
+            tracing::info!("download_github_asset: downloaded {} bytes", bytes.len());
+            return Some(bytes.to_vec());
+        } else if status.is_redirection() {
+            let location = resp.headers().get("location")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())?;
+            tracing::debug!("download_github_asset: following redirect to {}", location);
+            current_url = if location.starts_with("http://") || location.starts_with("https://") {
+                location
+            } else {
+                parsed.join(&location).map(|u| u.to_string()).unwrap_or(location)
+            };
+        } else {
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(
+                "download_github_asset: download from {} returned {}: {}",
+                current_url, status, &body[..body.len().min(300)]
+            );
+            return None;
         }
     }
 
-    tracing::warn!(
-        "resolve_github_asset_api_url: asset {} not found in release {}",
-        asset_name, tag
-    );
+    tracing::warn!("download_github_asset: too many redirects");
     None
 }
 

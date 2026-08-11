@@ -95,7 +95,6 @@ async fn reject_internal_target(url: &reqwest::Url) -> Result<(), String> {
 pub async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result<Vec<u8>, String> {
     let auth = crate::modules::github_token::auth_header().await;
     let mut current_url = url.to_string();
-    let mut tried_api_fallback = false;
 
     for _ in 0..6 {
         let parsed = reqwest::Url::parse(&current_url)
@@ -151,16 +150,17 @@ pub async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Re
                     .map(|u| u.to_string())
                     .unwrap_or(location);
             }
-        } else if response.status().as_u16() == 404 && !tried_api_fallback {
+        } else if response.status().as_u16() == 404 {
             // For private repos, the github.com/.../releases/download/... URL
-            // doesn't work with Bearer token auth. Fall back to the GitHub API.
-            tried_api_fallback = true;
+            // doesn't work with Bearer token auth. Fall back to the GitHub API
+            // asset download, which does everything in one function (metadata
+            // fetch + binary download) to avoid GitHub's secondary rate limit.
             let _ = response.text().await; // drain body
-            if let Some(api_url) = crate::modules::github_cache::resolve_github_asset_api_url(url, &auth).await {
-                current_url = api_url;
-                continue;
+            tracing::info!("fetch_capped: got 404, trying GitHub API asset download fallback");
+            if let Some(bytes) = crate::modules::github_cache::download_github_asset(url, &auth, cap).await {
+                return Ok(bytes);
             }
-            return Err(format!("fetch {url} failed: HTTP 404 and API fallback failed"));
+            return Err(format!("fetch {url} failed: HTTP 404 and API asset download failed"));
         } else {
             return Err(format!("fetch {current_url} failed: HTTP {}", response.status()));
         }
