@@ -586,6 +586,8 @@ async fn switch_version(
                     manifest.config_schema = fresh.config_schema;
                     manifest.widget_schema = fresh.widget_schema;
                     manifest.permissions = fresh.permissions;
+                    manifest.actions = fresh.actions;
+                    manifest.status_fields = fresh.status_fields;
                 }
             }
         }
