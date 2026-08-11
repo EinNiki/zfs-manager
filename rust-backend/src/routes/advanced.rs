@@ -29,6 +29,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/advanced/db/tables", get(db_tables))
         .route("/api/v1/advanced/db/query", post(db_query))
         .route("/api/v1/advanced/db/table/:name", get(db_table_rows))
+        .route("/api/v1/advanced/db/table/:name/row", post(db_insert_row).put(db_update_row).delete(db_delete_row))
         .with_state(state)
 }
 
@@ -249,19 +250,39 @@ async fn db_table_rows(
     let limit = q.limit.clamp(1, 1000);
     let offset = q.offset.max(0);
 
-    // Get column info
+    // Get column info + primary key columns
     let col_rows = pg
         .query(
-            "SELECT column_name, data_type FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = $1
-             ORDER BY ordinal_position",
+            "SELECT c.column_name, c.data_type,
+                    (SELECT COUNT(*) FROM information_schema.table_constraints tc
+                     JOIN information_schema.key_column_usage kcu
+                       ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+                     WHERE tc.table_name = c.table_name AND tc.constraint_type = 'PRIMARY KEY'
+                       AND kcu.column_name = c.column_name) > 0 AS is_pk
+             FROM information_schema.columns c
+             WHERE c.table_schema = 'public' AND c.table_name = $1
+             ORDER BY c.ordinal_position",
             &[&name],
         )
         .await
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
     let columns: Vec<Value> = col_rows
         .iter()
-        .map(|r| json!({ "name": r.get::<_, String>(0), "type": r.get::<_, String>(1) }))
+        .map(|r| json!({
+            "name": r.get::<_, String>(0),
+            "type": r.get::<_, String>(1),
+            "is_pk": r.get::<_, bool>(2),
+        }))
+        .collect();
+    let pk_cols: Vec<String> = columns
+        .iter()
+        .filter_map(|c| {
+            if c.get("is_pk").and_then(|v| v.as_bool()).unwrap_or(false) {
+                c.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
         .collect();
 
     // Get total count
@@ -289,6 +310,7 @@ async fn db_table_rows(
     Ok(Json(json!({
         "table": name,
         "columns": columns,
+        "pk_columns": pk_cols,
         "rows": row_data,
         "total": total,
         "limit": limit,
@@ -362,4 +384,157 @@ async fn db_query(
         })?;
         Ok(Json(json!({ "rows_affected": affected })))
     }
+}
+
+// ── Row CRUD ─────────────────────────────────────────────────────────────────
+
+/// Validate that a string is a safe SQL identifier (table or column name).
+fn validate_identifier(s: &str) -> Result<(), ApiError> {
+    if s.is_empty() || s.len() > 63 {
+        return Err(ApiError::BadRequest("invalid identifier".into()));
+    }
+    if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ApiError::BadRequest("invalid identifier".into()));
+    }
+    if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
+        return Err(ApiError::BadRequest("identifier cannot start with a digit".into()));
+    }
+    Ok(())
+}
+
+/// Convert a JSON value to a SQL literal for use in a dynamically built query.
+/// This is safe because we control the quoting — values never go through
+/// string interpolation unescaped.
+fn json_to_sql_literal(val: &Value) -> String {
+    match val {
+        Value::Null => "NULL".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => {
+            // Escape single quotes by doubling them
+            let escaped = s.replace('\'', "''");
+            format!("'{escaped}'")
+        }
+        _ => {
+            // For arrays/objects, serialize as JSON and cast to jsonb
+            let escaped = serde_json::to_string(val).unwrap_or_else(|_| "null".to_string()).replace('\'', "''");
+            format!("'{escaped}'::jsonb")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct DbRowBody {
+    /// Column → value pairs for the row
+    values: serde_json::Map<String, Value>,
+}
+
+/// POST /api/v1/advanced/db/table/:name/row — insert a new row
+async fn db_insert_row(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<DbRowBody>,
+) -> Result<Json<Value>, ApiError> {
+    let pg = state.pg.as_ref().ok_or(ApiError::InternalError("database unavailable".into()))?;
+    validate_identifier(&name)?;
+    if body.values.is_empty() {
+        return Err(ApiError::BadRequest("no values provided".into()));
+    }
+    for col in body.values.keys() {
+        validate_identifier(col)?;
+    }
+    let cols: Vec<String> = body.values.keys().cloned().collect();
+    let vals: Vec<String> = body.values.values().map(json_to_sql_literal).collect();
+    let sql = format!(
+        "INSERT INTO {name} ({}) VALUES ({})",
+        cols.join(", "),
+        vals.join(", ")
+    );
+    let affected = pg.execute(&sql, &[]).await.map_err(|e| {
+        warn!("advanced db_insert error: {e}");
+        ApiError::BadRequest(e.to_string())
+    })?;
+    Ok(Json(json!({ "ok": true, "rows_affected": affected })))
+}
+
+#[derive(Deserialize)]
+struct DbUpdateRowBody {
+    /// Column → new value pairs to update
+    values: serde_json::Map<String, Value>,
+    /// Column → value pairs identifying the row (typically primary keys)
+    #[serde(rename = "rowId")]
+    row_id: serde_json::Map<String, Value>,
+}
+
+/// PUT /api/v1/advanced/db/table/:name/row — update a row
+async fn db_update_row(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<DbUpdateRowBody>,
+) -> Result<Json<Value>, ApiError> {
+    let pg = state.pg.as_ref().ok_or(ApiError::InternalError("database unavailable".into()))?;
+    validate_identifier(&name)?;
+    if body.values.is_empty() {
+        return Err(ApiError::BadRequest("no values to update".into()));
+    }
+    if body.row_id.is_empty() {
+        return Err(ApiError::BadRequest("rowId is required for updates".into()));
+    }
+    for col in body.values.keys().chain(body.row_id.keys()) {
+        validate_identifier(col)?;
+    }
+    let set_clause: Vec<String> = body
+        .values
+        .iter()
+        .map(|(col, val)| format!("{col} = {}", json_to_sql_literal(val)))
+        .collect();
+    let where_clause: Vec<String> = body
+        .row_id
+        .iter()
+        .map(|(col, val)| format!("{col} = {}", json_to_sql_literal(val)))
+        .collect();
+    let sql = format!(
+        "UPDATE {name} SET {} WHERE {}",
+        set_clause.join(", "),
+        where_clause.join(" AND ")
+    );
+    let affected = pg.execute(&sql, &[]).await.map_err(|e| {
+        warn!("advanced db_update error: {e}");
+        ApiError::BadRequest(e.to_string())
+    })?;
+    Ok(Json(json!({ "ok": true, "rows_affected": affected })))
+}
+
+#[derive(Deserialize)]
+struct DbDeleteRowBody {
+    /// Column → value pairs identifying the row (typically primary keys)
+    #[serde(rename = "rowId")]
+    row_id: serde_json::Map<String, Value>,
+}
+
+/// DELETE /api/v1/advanced/db/table/:name/row — delete a row
+async fn db_delete_row(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<DbDeleteRowBody>,
+) -> Result<Json<Value>, ApiError> {
+    let pg = state.pg.as_ref().ok_or(ApiError::InternalError("database unavailable".into()))?;
+    validate_identifier(&name)?;
+    if body.row_id.is_empty() {
+        return Err(ApiError::BadRequest("rowId is required for deletes".into()));
+    }
+    for col in body.row_id.keys() {
+        validate_identifier(col)?;
+    }
+    let where_clause: Vec<String> = body
+        .row_id
+        .iter()
+        .map(|(col, val)| format!("{col} = {}", json_to_sql_literal(val)))
+        .collect();
+    let sql = format!("DELETE FROM {name} WHERE {}", where_clause.join(" AND "));
+    let affected = pg.execute(&sql, &[]).await.map_err(|e| {
+        warn!("advanced db_delete error: {e}");
+        ApiError::BadRequest(e.to_string())
+    })?;
+    Ok(Json(json!({ "ok": true, "rows_affected": affected })))
 }

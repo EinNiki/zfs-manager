@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import PageTransition from '../components/PageTransition';
-import { Database, Table2, RefreshCw, Play, ChevronRight, AlertTriangle, ChevronLeft, ChevronRight as ChevronRightIcon } from 'lucide-react';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { Database, Table2, RefreshCw, Play, AlertTriangle, ChevronLeft, ChevronRight as ChevronRightIcon, Edit3, Trash2, Save, X, Plus } from 'lucide-react';
 
 export default function DatabasePage() {
   const [tables, setTables] = useState<string[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [columns, setColumns] = useState<any[]>([]);
+  const [pkColumns, setPkColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [limit, setLimit] = useState(100);
@@ -20,6 +22,20 @@ export default function DatabasePage() {
   const [queryResult, setQueryResult] = useState<any>(null);
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState('');
+
+  // Inline editing
+  const [editingRow, setEditingRow] = useState<number | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, any>>({});
+  const [editSaving, setEditSaving] = useState(false);
+
+  // Insert new row
+  const [showInsert, setShowInsert] = useState(false);
+  const [insertValues, setInsertValues] = useState<Record<string, any>>({});
+  const [insertSaving, setInsertSaving] = useState(false);
+
+  // Delete row
+  const [deleteRowId, setDeleteRowId] = useState<Record<string, any> | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const loadTables = useCallback(async () => {
     setLoading(true);
@@ -36,9 +52,12 @@ export default function DatabasePage() {
   const loadTable = useCallback(async (name: string, lim = 100, off = 0) => {
     setLoading(true);
     setError('');
+    setEditingRow(null);
+    setShowInsert(false);
     try {
       const res = await api.dbTableRows(name, lim, off);
       setColumns(res.columns);
+      setPkColumns(res.pk_columns || []);
       setRows(res.rows);
       setTotal(res.total);
       setLimit(res.limit);
@@ -67,6 +86,93 @@ export default function DatabasePage() {
     }
   };
 
+  // ── Inline editing ──
+  const startEdit = (rowIndex: number) => {
+    const row = rows[rowIndex];
+    setEditingRow(rowIndex);
+    setEditValues({ ...row });
+  };
+
+  const cancelEdit = () => {
+    setEditingRow(null);
+    setEditValues({});
+  };
+
+  const saveEdit = async () => {
+    if (editingRow === null || !selectedTable) return;
+    const row = rows[editingRow];
+    // Build rowId from PK columns, or all columns if no PK
+    const idCols = pkColumns.length > 0 ? pkColumns : Object.keys(row);
+    const rowId: Record<string, any> = {};
+    for (const col of idCols) {
+      rowId[col] = row[col];
+    }
+    // Only send changed values
+    const changedValues: Record<string, any> = {};
+    for (const key of Object.keys(editValues)) {
+      if (JSON.stringify(editValues[key]) !== JSON.stringify(row[key])) {
+        changedValues[key] = editValues[key];
+      }
+    }
+    if (Object.keys(changedValues).length === 0) {
+      cancelEdit();
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await api.dbUpdateRow(selectedTable, changedValues, rowId);
+      setEditingRow(null);
+      setEditValues({});
+      await loadTable(selectedTable, limit, offset);
+    } catch (err: any) {
+      setError(err.message || 'Failed to update row');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  // ── Insert ──
+  const startInsert = () => {
+    const init: Record<string, any> = {};
+    for (const col of columns) {
+      if (col.is_pk) continue; // skip PK (usually auto-generated)
+      init[col.name] = '';
+    }
+    setInsertValues(init);
+    setShowInsert(true);
+  };
+
+  const doInsert = async () => {
+    if (!selectedTable) return;
+    setInsertSaving(true);
+    try {
+      await api.dbInsertRow(selectedTable, insertValues);
+      setShowInsert(false);
+      setInsertValues({});
+      await loadTable(selectedTable, limit, offset);
+    } catch (err: any) {
+      setError(err.message || 'Failed to insert row');
+    } finally {
+      setInsertSaving(false);
+    }
+  };
+
+  // ── Delete ──
+  const confirmDelete = async () => {
+    if (!deleteRowId || !selectedTable) return;
+    setDeleteLoading(true);
+    try {
+      await api.dbDeleteRow(selectedTable, deleteRowId);
+      setDeleteRowId(null);
+      await loadTable(selectedTable, limit, offset);
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete row');
+      setDeleteRowId(null);
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const formatValue = (val: any): string => {
     if (val === null) return 'NULL';
     if (val === undefined) return '';
@@ -77,6 +183,7 @@ export default function DatabasePage() {
 
   const totalPages = Math.ceil(total / limit);
   const currentPage = Math.floor(offset / limit) + 1;
+  const canEdit = pkColumns.length > 0;
 
   return (
     <PageTransition>
@@ -86,14 +193,15 @@ export default function DatabasePage() {
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Database</h1>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0' }}>
-              Inspect tables and run SQL queries for debugging
+              Inspect, edit, and query database tables for debugging
             </p>
           </div>
         </div>
 
         {error && (
-          <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius)', marginBottom: 16, fontSize: 13, color: '#ef4444' }}>
-            {error}
+          <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius)', marginBottom: 16, fontSize: 13, color: '#ef4444', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{error}</span>
+            <button onClick={() => setError('')} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><X size={14} /></button>
           </div>
         )}
 
@@ -210,24 +318,38 @@ export default function DatabasePage() {
                     <Table2 size={14} style={{ color: 'var(--accent)' }} />
                     <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{selectedTable}</span>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{total} rows</span>
+                    {!canEdit && (
+                      <span style={{ fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                        (no PK — edit via SQL)
+                      </span>
+                    )}
                   </div>
-                  <button onClick={() => loadTable(selectedTable, limit, offset)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
-                    <RefreshCw size={12} />
-                  </button>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {canEdit && (
+                      <button onClick={startInsert} className="btn btn-primary" style={{ height: 28, padding: '0 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Plus size={12} /> Insert
+                      </button>
+                    )}
+                    <button onClick={() => loadTable(selectedTable, limit, offset)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
+                      <RefreshCw size={12} />
+                    </button>
+                  </div>
                 </div>
 
                 {loading ? (
                   <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--text-muted)' }}>Loading...</div>
-                ) : rows.length === 0 ? (
+                ) : rows.length === 0 && !showInsert ? (
                   <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--text-muted)' }}>No rows</div>
                 ) : (
                   <div style={{ maxHeight: 500, overflow: 'auto' }} className="no-scrollbar">
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                       <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-elevated)', zIndex: 1 }}>
                         <tr>
+                          {canEdit && <th style={{ width: 70, padding: '6px 8px', borderBottom: '1px solid var(--border)' }}></th>}
                           {columns.map((col: any) => (
                             <th key={col.name} style={{ textAlign: 'left', padding: '6px 10px', fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
                               {col.name}
+                              {col.is_pk && <span style={{ color: 'var(--accent)', marginLeft: 4 }}>PK</span>}
                               <span style={{ display: 'block', fontSize: 9, fontWeight: 400, textTransform: 'none', color: 'var(--text-muted)', opacity: 0.6, marginTop: 2 }}>
                                 {col.type}
                               </span>
@@ -236,20 +358,97 @@ export default function DatabasePage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map((row, i) => (
-                          <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}
-                            onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'}
-                            onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
-                          >
+                        {/* Insert row */}
+                        {showInsert && (
+                          <tr style={{ borderBottom: '2px solid var(--accent)', background: 'var(--accent-dim)' }}>
+                            {canEdit && (
+                              <td style={{ padding: '4px 8px' }}>
+                                <div style={{ display: 'flex', gap: 2 }}>
+                                  <button onClick={doInsert} disabled={insertSaving} title="Save" style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: 'pointer', padding: 2, opacity: insertSaving ? 0.5 : 1 }}>
+                                    <Save size={13} />
+                                  </button>
+                                  <button onClick={() => setShowInsert(false)} title="Cancel" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
+                                    <X size={13} />
+                                  </button>
+                                </div>
+                              </td>
+                            )}
                             {columns.map((col: any) => (
-                              <td key={col.name} style={{ padding: '4px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                                title={formatValue(row[col.name])}
-                              >
-                                {formatValue(row[col.name])}
+                              <td key={col.name} style={{ padding: '2px 4px' }}>
+                                {col.is_pk ? (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: 10, fontStyle: 'italic' }}>auto</span>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    value={insertValues[col.name] ?? ''}
+                                    onChange={e => setInsertValues(v => ({ ...v, [col.name]: e.target.value }))}
+                                    placeholder="NULL"
+                                    style={{ width: '100%', minWidth: 60, padding: '3px 6px', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+                                  />
+                                )}
                               </td>
                             ))}
                           </tr>
-                        ))}
+                        )}
+                        {/* Data rows */}
+                        {rows.map((row, i) => {
+                          const isEditing = editingRow === i;
+                          return (
+                            <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)', background: isEditing ? 'var(--accent-dim)' : 'transparent' }}
+                              onMouseEnter={e => { if (!isEditing) (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'; }}
+                              onMouseLeave={e => { if (!isEditing) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                            >
+                              {canEdit && (
+                                <td style={{ padding: '4px 8px' }}>
+                                  {isEditing ? (
+                                    <div style={{ display: 'flex', gap: 2 }}>
+                                      <button onClick={saveEdit} disabled={editSaving} title="Save" style={{ background: 'none', border: 'none', color: 'var(--success)', cursor: 'pointer', padding: 2, opacity: editSaving ? 0.5 : 1 }}>
+                                        <Save size={13} />
+                                      </button>
+                                      <button onClick={cancelEdit} title="Cancel" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
+                                        <X size={13} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: 'flex', gap: 2 }}>
+                                      <button onClick={() => startEdit(i)} title="Edit" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
+                                        <Edit3 size={13} />
+                                      </button>
+                                      <button onClick={() => {
+                                        const idCols = pkColumns.length > 0 ? pkColumns : Object.keys(row);
+                                        const rowId: Record<string, any> = {};
+                                        for (const col of idCols) rowId[col] = row[col];
+                                        setDeleteRowId(rowId);
+                                      }} title="Delete" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}>
+                                        <Trash2 size={13} />
+                                      </button>
+                                    </div>
+                                  )}
+                                </td>
+                              )}
+                              {columns.map((col: any) => (
+                                <td key={col.name} style={{ padding: isEditing ? '2px 4px' : '4px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                  title={isEditing ? undefined : formatValue(row[col.name])}
+                                >
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={editValues[col.name] === null ? 'NULL' : String(editValues[col.name] ?? '')}
+                                      onChange={e => {
+                                        const v = e.target.value;
+                                        setEditValues(prev => ({ ...prev, [col.name]: v === 'NULL' ? null : v }));
+                                      }}
+                                      placeholder="NULL"
+                                      style={{ width: '100%', minWidth: 60, padding: '3px 6px', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 11, outline: 'none', boxSizing: 'border-box' }}
+                                    />
+                                  ) : (
+                                    formatValue(row[col.name])
+                                  )}
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -286,6 +485,17 @@ export default function DatabasePage() {
           </div>
         </div>
       </div>
+
+      {deleteRowId !== null && (
+        <ConfirmDialog
+          title="Delete row"
+          message={`Delete this row from "${selectedTable}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteRowId(null)}
+        />
+      )}
     </PageTransition>
   );
 }

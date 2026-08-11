@@ -221,7 +221,7 @@ export const api = {
     request<{ tables: string[] }>('/advanced/db/tables'),
 
   dbTableRows: (name: string, limit = 100, offset = 0) =>
-    request<{ table: string; columns: any[]; rows: any[]; total: number; limit: number; offset: number }>(
+    request<{ table: string; columns: any[]; pk_columns: string[]; rows: any[]; total: number; limit: number; offset: number }>(
       `/advanced/db/table/${encodeURIComponent(name)}?limit=${limit}&offset=${offset}`
     ),
 
@@ -232,6 +232,24 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ sql, read_only: readOnly }),
       }
+    ),
+
+  dbInsertRow: (table: string, values: Record<string, any>) =>
+    request<{ ok: boolean; rows_affected: number }>(
+      `/advanced/db/table/${encodeURIComponent(table)}/row`,
+      { method: 'POST', body: JSON.stringify({ values }) }
+    ),
+
+  dbUpdateRow: (table: string, values: Record<string, any>, rowId: Record<string, any>) =>
+    request<{ ok: boolean; rows_affected: number }>(
+      `/advanced/db/table/${encodeURIComponent(table)}/row`,
+      { method: 'PUT', body: JSON.stringify({ values, rowId }) }
+    ),
+
+  dbDeleteRow: (table: string, rowId: Record<string, any>) =>
+    request<{ ok: boolean; rows_affected: number }>(
+      `/advanced/db/table/${encodeURIComponent(table)}/row`,
+      { method: 'DELETE', body: JSON.stringify({ rowId }) }
     ),
 
   // ── Per-module database settings ───────────────────────────────────────────
