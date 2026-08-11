@@ -13,7 +13,6 @@ use serde_json::{json, Value};
 use super::module_store::mgmt_rate_limit;
 use crate::error::ApiError;
 use crate::modules::audit::{actor_from_headers, audit};
-use crate::modules::github_cache;
 use crate::modules::manifest::{Manifest, MAX_WASM_BYTES};
 use crate::modules::registry;
 use crate::modules::runner::{execute_module, parse_schedule};
@@ -571,12 +570,6 @@ async fn switch_version(
     let existing_manifest: Value = row.get(0);
     let registry_url: Option<String> = row.get(1);
 
-    // Re-fetch the module.toml from the repo to get potential new widget_schema/config_schema
-    let manifest_url = existing_manifest
-        .get("manifest_url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
     let mut manifest: Manifest = serde_json::from_value(existing_manifest.clone())
         .map_err(|e| ApiError::InternalError(format!("stored manifest invalid: {e}")))?;
 
@@ -625,9 +618,9 @@ async fn switch_version(
         return Err(ApiError::BadRequest("no wasm_url provided and no registry fallback available".into()));
     }
 
-    // Download the new WASM
-    // Use redirect::Policy::none() so we can preserve the Authorization
-    // header across GitHub's cross-host redirects (github.com → objects.githubusercontent.com)
+    // Download the new WASM using the shared fetch_capped helper.
+    // This gives us: SSRF protection, redirect limit, GitHub auth,
+    // and private-repo API fallback — all in one place.
     let client = reqwest::Client::builder()
         .user_agent("ZFS-Dashboard")
         .timeout(std::time::Duration::from_secs(60))
@@ -635,72 +628,10 @@ async fn switch_version(
         .build()
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
-    let auth = crate::modules::github_token::auth_header().await;
-    tracing::info!("switch_version: auth header present: {}", auth.is_some());
-    let mut current_url = wasm_url.clone();
-    let wasm: Vec<u8>;
-    let mut tried_api_fallback = false;
-
-    loop {
-        let mut wasm_req = client.get(&current_url);
-        let parsed = reqwest::Url::parse(&current_url)
-            .map_err(|e| ApiError::BadRequest(format!("invalid wasm url: {e}")))?;
-        let host = parsed.host_str().unwrap_or("");
-        let is_github = host.ends_with("github.com") || host.ends_with("githubusercontent.com");
-        if is_github {
-            if let Some((ref k, ref v)) = auth {
-                wasm_req = wasm_req.header(k, v);
-            }
-            // For GitHub API asset endpoints, we need Accept: octet-stream
-            if host == "api.github.com" {
-                wasm_req = wasm_req.header("Accept", "application/octet-stream");
-            }
-        }
-        tracing::info!(
-            "switch_version: downloading wasm from {} (host={}, auth={})",
-            current_url, host, is_github && auth.is_some()
-        );
-        let wasm_resp = wasm_req.send().await
-            .map_err(|e| ApiError::BadRequest(format!("failed to download wasm: {e}")))?;
-
-        let status = wasm_resp.status();
-        tracing::info!("switch_version: wasm download response status: {}", status);
-
-        if status.is_success() {
-            wasm = wasm_resp.bytes().await
-                .map_err(|e| ApiError::BadRequest(format!("failed to read wasm: {e}")))?
-                .to_vec();
-            break;
-        } else if status.is_redirection() {
-            let location = wasm_resp.headers().get("location")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-                .ok_or_else(|| ApiError::BadRequest("wasm download: redirect without location".to_string()))?;
-            tracing::info!("switch_version: following redirect to {}", location);
-            current_url = if location.starts_with("http://") || location.starts_with("https://") {
-                location
-            } else {
-                parsed.join(&location).map(|u| u.to_string()).unwrap_or(location)
-            };
-        } else if status.as_u16() == 404 && !tried_api_fallback {
-            // For private repos, the github.com/.../releases/download/... URL
-            // doesn't work with Bearer token auth. Fall back to the GitHub API
-            // asset endpoint which does work with token auth.
-            tried_api_fallback = true;
-            tracing::info!("switch_version: got 404, trying GitHub API asset endpoint fallback");
-            let _ = wasm_resp.text().await; // drain body
-            if let Some(api_url) = github_cache::resolve_github_asset_api_url(&wasm_url, &auth).await {
-                current_url = api_url;
-                continue;
-            }
-            return Err(ApiError::BadRequest(format!("wasm download returned 404 and API fallback failed (url: {})", wasm_url)));
-        } else {
-            // Log response body for debugging
-            let body_text = wasm_resp.text().await.unwrap_or_default();
-            tracing::warn!("switch_version: wasm download failed with status {} from {}. Response: {}", status, current_url, &body_text[..body_text.len().min(500)]);
-            return Err(ApiError::BadRequest(format!("wasm download returned {} (url: {})", status, current_url)));
-        }
-    }
+    tracing::info!("switch_version: downloading wasm from {}", wasm_url);
+    let wasm = registry::fetch_capped(&client, &wasm_url, MAX_WASM_BYTES)
+        .await
+        .map_err(ApiError::BadRequest)?;
     if wasm.len() > MAX_WASM_BYTES {
         return Err(ApiError::BadRequest(format!("wasm exceeds {} bytes", MAX_WASM_BYTES)));
     }

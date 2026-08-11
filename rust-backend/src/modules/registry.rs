@@ -92,7 +92,7 @@ async fn reject_internal_target(url: &reqwest::Url) -> Result<(), String> {
     Ok(())
 }
 
-async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result<Vec<u8>, String> {
+pub async fn fetch_capped(client: &reqwest::Client, url: &str, cap: usize) -> Result<Vec<u8>, String> {
     let auth = crate::modules::github_token::auth_header().await;
     let mut current_url = url.to_string();
     let mut tried_api_fallback = false;
