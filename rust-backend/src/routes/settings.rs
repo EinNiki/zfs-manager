@@ -18,6 +18,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/settings/password",     post(change_password))
         .route("/api/v1/settings/github-interval", get(get_github_interval).put(set_github_interval))
         .route("/api/v1/settings/github-token", get(get_github_token).put(set_github_token))
+        .route("/api/v1/settings/accent-color", get(get_accent_color).put(set_accent_color))
         .with_state(state)
 }
 
@@ -283,4 +284,50 @@ async fn set_github_token(
 
     let configured = !body.token.trim().is_empty();
     Ok(Json(json!({ "configured": configured })))
+}
+
+// ── Accent color ─────────────────────────────────────────────────────────────
+
+/// GET /api/v1/settings/accent-color
+async fn get_accent_color(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let pg = state.pg.as_ref().ok_or_else(|| ApiError::InternalError("Database unavailable".into()))?;
+    let row = pg
+        .query_opt("SELECT value FROM app_settings WHERE key = 'accent_color'", &[])
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+    let color = row
+        .and_then(|r| r.get::<_, Value>(0).as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "#6366f1".to_string());
+
+    Ok(Json(json!({ "color": color })))
+}
+
+#[derive(Deserialize)]
+struct SetAccentColorBody {
+    color: String,
+}
+
+/// PUT /api/v1/settings/accent-color
+async fn set_accent_color(
+    State(state): State<AppState>,
+    Json(body): Json<SetAccentColorBody>,
+) -> Result<Json<Value>, ApiError> {
+    // Validate hex color format
+    let color = body.color.trim().to_string();
+    if !color.starts_with('#') || color.len() != 7 || !color[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::BadRequest("color must be a valid hex color like #6366f1".into()));
+    }
+    let pg = state.pg.as_ref().ok_or_else(|| ApiError::InternalError("Database unavailable".into()))?;
+    pg.execute(
+        "INSERT INTO app_settings(key, value, updated_at) VALUES('accent_color', $1, NOW()) \
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+        &[&serde_json::json!(color)],
+    )
+    .await
+    .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+    Ok(Json(json!({ "color": color })))
 }

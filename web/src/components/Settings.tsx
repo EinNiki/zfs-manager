@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { Key, Lock, Plus, Trash2, Eye, EyeOff, CheckCircle, XCircle, Copy, Monitor, Database, Shield, Zap, FolderPlus, RotateCcw, Edit2, Check, X, GripVertical, RefreshCw } from 'lucide-react';
+import { Key, Lock, Plus, Trash2, Eye, EyeOff, CheckCircle, XCircle, Copy, Monitor, Database, Shield, Zap, FolderPlus, RotateCcw, Edit2, Check, X, GripVertical, RefreshCw, Package, Palette } from 'lucide-react';
 import { api } from '../api';
 import PageTransition from './PageTransition';
 import ConfirmDialog from './ConfirmDialog';
 import { useIsMobile } from '../hooks/useBreakpoint';
 import { getNavLayout, saveNavLayout, resetNavLayout, syncCustomTabsToLayout, markCustomTabDeleting, unmarkCustomTabDeleting, NavCategory, NavItem } from '../utils/navStorage';
+import { getAccentColor, setAccentColor, ACCENT_PRESETS } from '../utils/themeColor';
 
 interface SettingsProps {
   onPasswordChanged?: () => void;
@@ -30,7 +31,7 @@ interface ToastEntry {
 
 let toastIdCounter = 0;
 
-type Tab = 'security' | 'api' | 'appearance' | 'general' | 'custom_tabs';
+type Tab = 'security' | 'api' | 'appearance' | 'general' | 'custom_tabs' | 'modules';
 
 function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' | 'error') => void }) {
   const [layout, setLayout] = useState<NavCategory[]>([]);
@@ -550,9 +551,10 @@ function CustomTabsTab({ addToast }: { addToast: (msg: string, type: 'success' |
 /* ── Tab definition ── */
 const TABS: { id: Tab; label: string; icon: React.ReactNode; desc: string }[] = [
   { id: 'security',   label: 'Security',   icon: <Lock size={15} />,    desc: 'Password & authentication' },
+  { id: 'modules',    label: 'Modules',    icon: <Package size={15} />, desc: 'Module updates & GitHub token' },
   { id: 'custom_tabs', label: 'Tabs',       icon: <Zap size={15} />,     desc: 'Modular dashboard tabs & navigation' },
   { id: 'api',        label: 'API Keys',   icon: <Key size={15} />,     desc: 'Programmatic access tokens' },
-  { id: 'appearance', label: 'Appearance', icon: <Monitor size={15} />, desc: 'Interface preferences' },
+  { id: 'appearance', label: 'Appearance', icon: <Monitor size={15} />, desc: 'Interface preferences & theme color' },
   { id: 'general',    label: 'General',    icon: <Database size={15} />, desc: 'Application defaults' },
 ];
 
@@ -629,57 +631,6 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
   const [showNew, setShowNew] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
-
-  // GitHub update interval
-  const [githubHours, setGithubHours] = useState(6);
-  const [githubSaving, setGithubSaving] = useState(false);
-  const [githubSaved, setGithubSaved] = useState(false);
-
-  // GitHub token
-  const [githubToken, setGithubToken] = useState('');
-  const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
-  const [githubTokenMasked, setGithubTokenMasked] = useState<string | null>(null);
-  const [githubTokenSaving, setGithubTokenSaving] = useState(false);
-  const [githubTokenSaved, setGithubTokenSaved] = useState(false);
-
-  useEffect(() => {
-    api.getGithubInterval().then(r => setGithubHours(r.hours)).catch(() => {});
-    api.getGithubToken().then(r => {
-      setGithubTokenConfigured(r.configured);
-      setGithubTokenMasked(r.masked);
-    }).catch(() => {});
-  }, []);
-
-  const saveGithubInterval = async () => {
-    setGithubSaving(true);
-    setGithubSaved(false);
-    try {
-      const r = await api.setGithubInterval(githubHours);
-      setGithubHours(r.hours);
-      setGithubSaved(true);
-      setTimeout(() => setGithubSaved(false), 3000);
-    } catch { /* ignore */ }
-    finally { setGithubSaving(false); }
-  };
-
-  const saveGithubToken = async () => {
-    setGithubTokenSaving(true);
-    setGithubTokenSaved(false);
-    try {
-      const r = await api.setGithubToken(githubToken);
-      setGithubTokenConfigured(r.configured);
-      setGithubToken('');
-      if (r.configured) {
-        const fresh = await api.getGithubToken();
-        setGithubTokenMasked(fresh.masked);
-      } else {
-        setGithubTokenMasked(null);
-      }
-      setGithubTokenSaved(true);
-      setTimeout(() => setGithubTokenSaved(false), 3000);
-    } catch { /* ignore */ }
-    finally { setGithubTokenSaving(false); }
-  };
 
   const strength = (() => {
     if (next.length === 0) return null;
@@ -759,9 +710,67 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
 
-      {/* GitHub update interval */}
-      <div style={{ paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+/* ── Modules tab ── */
+function ModulesTab() {
+  // GitHub update interval
+  const [githubHours, setGithubHours] = useState(6);
+  const [githubSaving, setGithubSaving] = useState(false);
+  const [githubSaved, setGithubSaved] = useState(false);
+
+  // GitHub token
+  const [githubToken, setGithubToken] = useState('');
+  const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
+  const [githubTokenMasked, setGithubTokenMasked] = useState<string | null>(null);
+  const [githubTokenSaving, setGithubTokenSaving] = useState(false);
+  const [githubTokenSaved, setGithubTokenSaved] = useState(false);
+
+  useEffect(() => {
+    api.getGithubInterval().then(r => setGithubHours(r.hours)).catch(() => {});
+    api.getGithubToken().then(r => {
+      setGithubTokenConfigured(r.configured);
+      setGithubTokenMasked(r.masked);
+    }).catch(() => {});
+  }, []);
+
+  const saveGithubInterval = async () => {
+    setGithubSaving(true);
+    setGithubSaved(false);
+    try {
+      const r = await api.setGithubInterval(githubHours);
+      setGithubHours(r.hours);
+      setGithubSaved(true);
+      setTimeout(() => setGithubSaved(false), 3000);
+    } catch { /* ignore */ }
+    finally { setGithubSaving(false); }
+  };
+
+  const saveGithubToken = async () => {
+    setGithubTokenSaving(true);
+    setGithubTokenSaved(false);
+    try {
+      const r = await api.setGithubToken(githubToken);
+      setGithubTokenConfigured(r.configured);
+      setGithubToken('');
+      if (r.configured) {
+        const fresh = await api.getGithubToken();
+        setGithubTokenMasked(fresh.masked);
+      } else {
+        setGithubTokenMasked(null);
+      }
+      setGithubTokenSaved(true);
+      setTimeout(() => setGithubTokenSaved(false), 3000);
+    } catch { /* ignore */ }
+    finally { setGithubTokenSaving(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {/* Module Update Check */}
+      <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
           <RefreshCw size={16} style={{ color: 'var(--accent)' }} />
           <div>
@@ -816,11 +825,20 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
           </div>
         </div>
 
-        {githubTokenConfigured && (
+        {githubTokenSaved && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 12px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius)' }}>
+            <CheckCircle size={14} style={{ color: 'var(--green)' }} />
+            <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-secondary)' }}>
+              Token saved.
+            </span>
+          </div>
+        )}
+
+        {githubTokenConfigured && !githubTokenSaved && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 12px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius)' }}>
             <CheckCircle size={14} style={{ color: 'var(--green)' }} />
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)' }}>
-              Token set: {githubTokenMasked}
+              Token configured: {githubTokenMasked}
             </span>
           </div>
         )}
@@ -839,7 +857,7 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
             className="btn btn-primary"
             style={{ height: 36, fontSize: 13, padding: '0 18px', opacity: (githubTokenSaving || (!githubToken && !githubTokenConfigured)) ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 6 }}
           >
-            {githubTokenSaving ? 'Saving…' : githubTokenSaved ? 'Saved!' : githubTokenConfigured ? 'Replace' : 'Save'}
+            {githubTokenSaving ? 'Saving…' : githubTokenConfigured ? 'Replace' : 'Save'}
           </button>
           {githubTokenConfigured && (
             <button
@@ -1016,6 +1034,7 @@ function ApiKeysTab({ addToast }: { addToast: (msg: string, type: 'success' | 'e
 /* ── Appearance tab ── */
 function AppearanceTab() {
   const [animEnabled, setAnimEnabled] = useState(localStorage.getItem('page_animations') !== 'false');
+  const [accentColor, setAccentColorState] = useState(getAccentColor());
 
   const toggle = () => {
     const next = !animEnabled;
@@ -1023,11 +1042,77 @@ function AppearanceTab() {
     localStorage.setItem('page_animations', next ? 'true' : 'false');
   };
 
+  const handleColorChange = (hex: string) => {
+    setAccentColorState(hex);
+    setAccentColor(hex);
+  };
+
   return (
     <div>
       <SettingRow label="Page transition animations" description="Slide-in animation when switching between pages">
         <Toggle value={animEnabled} onChange={toggle} />
       </SettingRow>
+
+      {/* Accent color picker */}
+      <div style={{ paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <Palette size={16} style={{ color: 'var(--accent)' }} />
+          <div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
+              Accent Color
+            </div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              Base color for buttons, links, highlights. Applied live and saved across devices.
+            </div>
+          </div>
+        </div>
+
+        {/* Preset swatches */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+          {ACCENT_PRESETS.map(color => (
+            <button
+              key={color}
+              onClick={() => handleColorChange(color)}
+              style={{
+                width: 36, height: 36, borderRadius: 'var(--radius)',
+                background: color, border: accentColor.toLowerCase() === color.toLowerCase() ? '3px solid var(--text-primary)' : '2px solid var(--border)',
+                cursor: 'pointer', transition: 'border 0.15s, transform 0.15s',
+                transform: accentColor.toLowerCase() === color.toLowerCase() ? 'scale(1.1)' : 'scale(1)',
+              }}
+              title={color}
+            />
+          ))}
+        </div>
+
+        {/* Custom color input */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <input
+            type="color"
+            value={accentColor}
+            onChange={e => handleColorChange(e.target.value)}
+            style={{ width: 40, height: 36, border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', background: 'none', padding: 2 }}
+          />
+          <input
+            type="text"
+            value={accentColor}
+            onChange={e => {
+              const v = e.target.value;
+              if (/^#[0-9a-fA-F]{0,6}$/.test(v)) {
+                setAccentColorState(v);
+                if (v.length === 7) setAccentColor(v);
+              }
+            }}
+            style={{ ...inputStyle, width: 120, fontFamily: 'var(--font-mono)', fontSize: 13 }}
+          />
+          <button
+            onClick={() => handleColorChange('#6366f1')}
+            className="btn btn-secondary"
+            style={{ height: 36, fontSize: 12, padding: '0 14px' }}
+          >
+            Reset
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1156,6 +1241,7 @@ export default function Settings({ onPasswordChanged, pools = [], selectedPool, 
           </div>
 
           {activeTab === 'security'    && <SecurityTab onSuccess={handlePasswordChanged} />}
+          {activeTab === 'modules'     && <ModulesTab />}
           {activeTab === 'api'         && <ApiKeysTab addToast={addToast} />}
           {activeTab === 'custom_tabs' && <CustomTabsTab addToast={addToast} />}
           {activeTab === 'appearance'  && <AppearanceTab />}

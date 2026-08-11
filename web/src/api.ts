@@ -160,6 +160,15 @@ export const api = {
       body: JSON.stringify({ token }),
     }),
 
+  getAccentColor: () =>
+    request<{ color: string }>('/settings/accent-color'),
+
+  setAccentColor: (color: string) =>
+    request<{ color: string }>('/settings/accent-color', {
+      method: 'PUT',
+      body: JSON.stringify({ color }),
+    }),
+
   // ── Per-module database settings ───────────────────────────────────────────
   getModuleDatabase: (id: string) =>
     request<ModuleDbSettings>(`/modules/${encodeURIComponent(id)}/database`),
