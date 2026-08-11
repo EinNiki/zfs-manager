@@ -600,9 +600,9 @@ function SettingRow({ label, description, children }: { label: string; descripti
   );
 }
 
-function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <button onClick={() => onChange(!value)} style={{ width: 44, height: 22, borderRadius: 11, flexShrink: 0, background: value ? 'var(--success)' : 'var(--bg-elevated)', border: `1px solid ${value ? 'var(--success)' : 'var(--border)'}`, position: 'relative', cursor: 'pointer', transition: 'all 0.2s' }}>
+    <button onClick={() => !disabled && onChange(!value)} disabled={disabled} style={{ width: 44, height: 22, borderRadius: 11, flexShrink: 0, background: value ? 'var(--success)' : 'var(--bg-elevated)', border: `1px solid ${value ? 'var(--success)' : 'var(--border)'}`, position: 'relative', cursor: disabled ? 'not-allowed' : 'pointer', transition: 'all 0.2s', opacity: disabled ? 0.5 : 1 }}>
       <div style={{ position: 'absolute', top: 2, left: value ? 22 : 2, width: 16, height: 16, borderRadius: 8, background: '#fff', transition: 'left 0.2s' }} />
     </button>
   );
@@ -1030,6 +1030,12 @@ function ApiKeysTab({ addToast }: { addToast: (msg: string, type: 'success' | 'e
 function AppearanceTab() {
   const [animEnabled, setAnimEnabled] = useState(localStorage.getItem('page_animations') !== 'false');
   const [accentColor, setAccentColorState] = useState(getAccentColor());
+  const [advancedMode, setAdvancedMode] = useState(false);
+  const [advancedLoading, setAdvancedLoading] = useState(false);
+
+  useEffect(() => {
+    api.getAdvancedMode().then(r => setAdvancedMode(r.enabled)).catch(() => {});
+  }, []);
 
   const toggle = () => {
     const next = !animEnabled;
@@ -1042,11 +1048,36 @@ function AppearanceTab() {
     setAccentColor(hex);
   };
 
+  const toggleAdvanced = async () => {
+    setAdvancedLoading(true);
+    const next = !advancedMode;
+    try {
+      await api.setAdvancedMode(next);
+      setAdvancedMode(next);
+      // Force sidebar reload by dispatching the nav update event
+      window.dispatchEvent(new CustomEvent('zfs_nav_updated'));
+    } catch (err: any) {
+      console.error('Failed to toggle advanced mode:', err);
+    } finally {
+      setAdvancedLoading(false);
+    }
+  };
+
   return (
     <div>
       <SettingRow label="Page transition animations" description="Slide-in animation when switching between pages">
         <Toggle value={animEnabled} onChange={toggle} />
       </SettingRow>
+
+      {/* Advanced mode toggle */}
+      <div style={{ paddingTop: 16, borderTop: '1px solid var(--border-subtle)', marginBottom: 16 }}>
+        <SettingRow
+          label="Advanced mode"
+          description="Show File System and Database tools in the sidebar for debugging. Off by default."
+        >
+          <Toggle value={advancedMode} onChange={toggleAdvanced} disabled={advancedLoading} />
+        </SettingRow>
+      </div>
 
       {/* Accent color picker */}
       <div style={{ paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>

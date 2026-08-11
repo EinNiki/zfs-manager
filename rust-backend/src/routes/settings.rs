@@ -42,6 +42,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/settings/github-interval", get(get_github_interval).put(set_github_interval))
         .route("/api/v1/settings/github-token", get(get_github_token).put(set_github_token))
         .route("/api/v1/settings/accent-color", get(get_accent_color).put(set_accent_color))
+        .route("/api/v1/settings/advanced-mode", get(get_advanced_mode).put(set_advanced_mode))
         .with_state(state)
 }
 
@@ -342,4 +343,44 @@ async fn set_accent_color(
     *ACCENT_COLOR_CACHE.write().await = Some(color.clone());
 
     Ok(Json(json!({ "color": color })))
+}
+
+// ── Advanced mode ────────────────────────────────────────────────────────────
+
+/// GET /api/v1/settings/advanced-mode
+async fn get_advanced_mode(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let enabled = if let Some(ref pg) = state.pg {
+        pg.query_opt("SELECT value FROM app_settings WHERE key = 'advanced_mode'", &[])
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.get::<_, Value>(0).as_bool())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    Ok(Json(json!({ "enabled": enabled })))
+}
+
+#[derive(Deserialize)]
+struct SetAdvancedModeBody {
+    enabled: bool,
+}
+
+/// PUT /api/v1/settings/advanced-mode
+async fn set_advanced_mode(
+    State(state): State<AppState>,
+    Json(body): Json<SetAdvancedModeBody>,
+) -> Result<Json<Value>, ApiError> {
+    let pg = state.pg.as_ref().ok_or_else(|| ApiError::InternalError("Database unavailable".into()))?;
+    pg.execute(
+        "INSERT INTO app_settings(key, value, updated_at) VALUES('advanced_mode', $1, NOW()) \
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+        &[&serde_json::json!(body.enabled)],
+    )
+    .await
+    .map_err(|e| ApiError::InternalError(e.to_string()))?;
+    Ok(Json(json!({ "enabled": body.enabled })))
 }

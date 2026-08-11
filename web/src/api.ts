@@ -169,6 +169,71 @@ export const api = {
       body: JSON.stringify({ color }),
     }),
 
+  // ── Advanced mode ───────────────────────────────────────────────────────────
+  getAdvancedMode: () =>
+    request<{ enabled: boolean }>('/settings/advanced-mode'),
+
+  setAdvancedMode: (enabled: boolean) =>
+    request<{ enabled: boolean }>('/settings/advanced-mode', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // ── File system (advanced) ──────────────────────────────────────────────────
+  fsList: (path: string) =>
+    request<{ path: string; is_file: boolean; entries?: any[]; size?: number }>(
+      `/advanced/fs?path=${encodeURIComponent(path)}`
+    ),
+
+  fsRead: async (path: string): Promise<string> => {
+    const headers: Record<string, string> = { Accept: 'text/plain' };
+    if (API_KEY) {
+      headers['X-API-Key'] = API_KEY;
+      headers['Authorization'] = `Bearer ${API_KEY}`;
+    }
+    const response = await fetch(`${API_BASE_URL}/advanced/fs/content?path=${encodeURIComponent(path)}`, { headers });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `Request failed with status ${response.status}`);
+    }
+    return response.text();
+  },
+
+  fsWrite: (path: string, content: string) =>
+    request<{ ok: boolean }>('/advanced/fs/content', {
+      method: 'PUT',
+      body: JSON.stringify({ path, content }),
+    }),
+
+  fsDelete: (path: string) =>
+    request<{ ok: boolean }>(`/advanced/fs/${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    }),
+
+  fsUpload: (path: string, contentBase64: string) =>
+    request<{ ok: boolean; size: number }>('/advanced/fs', {
+      method: 'POST',
+      body: JSON.stringify({ path, content_base64: contentBase64 }),
+    }),
+
+  // ── Database (advanced) ─────────────────────────────────────────────────────
+  dbTables: () =>
+    request<{ tables: string[] }>('/advanced/db/tables'),
+
+  dbTableRows: (name: string, limit = 100, offset = 0) =>
+    request<{ table: string; columns: any[]; rows: any[]; total: number; limit: number; offset: number }>(
+      `/advanced/db/table/${encodeURIComponent(name)}?limit=${limit}&offset=${offset}`
+    ),
+
+  dbQuery: (sql: string, readOnly = true) =>
+    request<{ columns?: string[]; rows?: any[]; row_count?: number; rows_affected?: number }>(
+      '/advanced/db/query',
+      {
+        method: 'POST',
+        body: JSON.stringify({ sql, read_only: readOnly }),
+      }
+    ),
+
   // ── Per-module database settings ───────────────────────────────────────────
   getModuleDatabase: (id: string) =>
     request<ModuleDbSettings>(`/modules/${encodeURIComponent(id)}/database`),

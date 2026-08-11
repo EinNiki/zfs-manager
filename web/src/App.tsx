@@ -14,6 +14,8 @@ import Notifications from './pages/Notifications';
 import ModuleStore from './pages/ModuleStore';
 import ActiveModules from './pages/ActiveModules';
 import CustomTabPage from './pages/CustomTabPage';
+import FileSystemPage from './pages/FileSystemPage';
+import DatabasePage from './pages/DatabasePage';
 import { ZFSPool, ZFSDataset, ZFSLog } from './types';
 import { api, formatBytes, setApiKey } from './api';
 import { Bell } from 'lucide-react';
@@ -30,6 +32,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/logs':      'System Logs',
   '/notifications': 'Notifications',
   '/settings':  'Settings',
+  '/filesystem': 'File System',
+  '/database':  'Database',
 };
 
 function getBreakpoint(): Breakpoint {
@@ -729,6 +733,8 @@ export default function App() {
               } />
               <Route path="/store" element={<ModuleStore />} />
               <Route path="/modules" element={<ActiveModules />} />
+              <Route path="/filesystem" element={<FileSystemPage />} />
+              <Route path="/database" element={<DatabasePage />} />
               <Route path="/custom/:slug" element={<CustomTabPage />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/login" element={<Navigate to="/dashboard" replace />} />

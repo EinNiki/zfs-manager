@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Activity, Database, Layers,
   Camera, FileText, Settings, HardDrive, LogOut,
   Server, ChevronLeft, ChevronRight, Bell,
-  Store, Blocks,
+  Store, Blocks, FolderTree, Terminal,
 } from 'lucide-react';
 
 import { api } from '../api';
@@ -22,6 +22,8 @@ const ICON_MAP: Record<string, React.ComponentType<any>> = {
   FileText,
   Bell,
   Settings,
+  FolderTree,
+  Terminal,
 };
 
 export type Breakpoint = 'mobile' | 'tablet' | 'desktop';
@@ -49,6 +51,7 @@ export default function Sidebar({
   const [hoverExpanded, setHoverExpanded] = useState(false);
   const [githubVersion, setGithubVersion] = useState<string | null>(null);
   const [navLayout, setNavLayout] = useState<NavCategory[]>([]);
+  const [advancedMode, setAdvancedMode] = useState(false);
 
   const loadNav = async () => {
     // Render the cached layout instantly so nav changes (e.g. deleted tabs)
@@ -60,6 +63,13 @@ export default function Sidebar({
       setNavLayout(synced);
     } catch {
       /* keep cached layout */
+    }
+    // Check advanced mode
+    try {
+      const adv = await api.getAdvancedMode();
+      setAdvancedMode(adv.enabled);
+    } catch {
+      /* advanced mode off */
     }
   };
 
@@ -186,10 +196,23 @@ export default function Sidebar({
         flex: 1, overflowY: 'auto', overflowX: 'hidden',
         padding: isCollapsed ? '12px 6px' : '12px 8px',
       }} className="no-scrollbar">
-        {navLayout.map((group, gi) => {
+        {(() => {
+          // Append Advanced category when advanced mode is enabled
+          let layout = navLayout;
+          if (advancedMode) {
+            layout = [...navLayout, {
+              id: 'cat_advanced',
+              label: 'Advanced',
+              items: [
+                { id: 'filesystem', label: 'File System', path: '/filesystem', iconName: 'FolderTree' },
+                { id: 'database', label: 'Database', path: '/database', iconName: 'Terminal' },
+              ],
+            }];
+          }
+          return layout.map((group, gi) => {
           if (group.items.length === 0) return null;
           return (
-            <div key={group.id || gi} style={{ marginBottom: gi < navLayout.length - 1 ? 24 : 0 }}>
+            <div key={group.id || gi} style={{ marginBottom: gi < layout.length - 1 ? 24 : 0 }}>
               {!isCollapsed && (
                 <div style={{
                   fontFamily: 'var(--font-ui)', fontSize: 10, fontWeight: 600,
@@ -243,7 +266,8 @@ export default function Sidebar({
               })}
             </div>
           );
-        })}
+        });
+        })()}
       </nav>
 
       <div style={{
