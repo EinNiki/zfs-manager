@@ -826,6 +826,18 @@ function ModulesTab() {
           </div>
         )}
 
+        {/* Status indicator: shows whether a token is configured */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 12px', background: githubTokenConfigured ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border: `1px solid ${githubTokenConfigured ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`, borderRadius: 'var(--radius)' }}>
+          {githubTokenConfigured ? (
+            <CheckCircle size={14} style={{ color: 'var(--success)' }} />
+          ) : (
+            <XCircle size={14} style={{ color: 'var(--danger)' }} />
+          )}
+          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-secondary)' }}>
+            {githubTokenConfigured ? 'Token hinterlegt' : 'Kein Token hinterlegt'}
+          </span>
+        </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <input
             type="password"
