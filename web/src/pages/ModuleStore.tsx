@@ -139,17 +139,17 @@ export default function ModuleStore() {
     if (isManualRefresh) setRefreshing(true);
     setLoading(true);
     try {
+      // Start both requests in parallel — registries is a fast DB query
+      // but was previously sequential after the store listing, adding latency.
+      const regsPromise = api.getRegistries();
       let store;
       if (forceRefresh) {
-        // Force refresh: call the backend refresh endpoint which invalidates
-        // the GitHub cache, re-fetches all registries + release info, and
-        // returns the fresh store listing.
         store = await api.refreshModuleStore();
         updateModuleStoreCache(store);
       } else {
         store = await getModuleStoreCached(false);
       }
-      const regs = await api.getRegistries();
+      const regs = await regsPromise;
       setRegistries(regs.registries);
       setErrors(store.errors);
       setRawStoreModules(store.modules);

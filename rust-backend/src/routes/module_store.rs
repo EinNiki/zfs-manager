@@ -6,6 +6,8 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::LazyLock;
+use tokio::sync::RwLock;
 
 use crate::error::ApiError;
 use crate::modules::audit::{actor_from_headers, audit};
@@ -15,6 +17,11 @@ use crate::state::AppState;
 
 use sha2::Digest;
 use redis::AsyncCommands;
+
+/// In-memory cache for configured registries — avoids DB query on every
+/// store page load. Invalidated when registries are added/removed.
+static REGISTRIES_MEM: LazyLock<RwLock<Option<Vec<(i32, String, bool)>>>> =
+    LazyLock::new(|| RwLock::new(None));
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -58,8 +65,32 @@ pub fn mgmt_rate_limit(state: &AppState, headers: &HeaderMap) -> Result<(), ApiE
 }
 
 pub async fn configured_registries(state: &AppState) -> Result<Vec<(i32, String, bool)>, ApiError> {
-    let mut registries = Vec::new();
+    // Try in-memory cache first (fastest — no IO)
+    if let Some(cached) = REGISTRIES_MEM.read().await.as_ref() {
+        return Ok(cached.clone());
+    }
+
+    // Try Redis cache (200ms timeout)
+    let rkey = "registries:list";
+    if let Some(ref redis) = state.redis {
+        let mut conn = redis.clone();
+        if let Ok(cached) = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            conn.get::<_, Option<String>>(rkey),
+        ).await {
+            if let Ok(Some(json_str)) = cached {
+                if let Ok(regs) = serde_json::from_str::<Vec<(i32, String, bool)>>(&json_str) {
+                    // Populate in-memory cache
+                    *REGISTRIES_MEM.write().await = Some(regs.clone());
+                    return Ok(regs);
+                }
+            }
+        }
+    }
+
+    // Cache miss — query DB
     let default_url = registry::default_registry_url();
+    let mut registries = Vec::new();
     registries.push((0, default_url.clone(), true));
 
     if let Some(ref pg) = state.pg {
@@ -73,7 +104,34 @@ pub async fn configured_registries(state: &AppState) -> Result<Vec<(i32, String,
             registries.push((id, url, false));
         }
     }
+
+    // Cache in Redis (5 min TTL)
+    if let Some(ref redis) = state.redis {
+        let mut conn = redis.clone();
+        if let Ok(json_str) = serde_json::to_string(&registries) {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                conn.set_ex::<_, _, ()>(rkey, json_str, 300),
+            ).await;
+        }
+    }
+
+    // Cache in memory
+    *REGISTRIES_MEM.write().await = Some(registries.clone());
+
     Ok(registries)
+}
+
+/// Invalidates the registries cache (called when registries are added/removed).
+pub async fn invalidate_registries_cache(state: &AppState) {
+    *REGISTRIES_MEM.write().await = None;
+    if let Some(ref redis) = state.redis {
+        let mut conn = redis.clone();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            conn.del::<_, ()>("registries:list"),
+        ).await;
+    }
 }
 
 const STORE_CACHE_TTL: u64 = 120; // 2 minutes
@@ -480,6 +538,7 @@ async fn add_registry(
 
     // Invalidate caches so the new registry shows up immediately
     invalidate_store_cache(&state).await;
+    invalidate_registries_cache(&state).await;
 
     Ok(Json(json!({ "id": id, "url": url })))
 }
@@ -509,6 +568,7 @@ async fn remove_registry(
     // Invalidate caches so the removed registry disappears immediately
     registry::invalidate_index_cache(&url, &state.redis).await;
     invalidate_store_cache(&state).await;
+    invalidate_registries_cache(&state).await;
 
     Ok(Json(json!({ "ok": true })))
 }
