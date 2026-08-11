@@ -272,19 +272,17 @@ async fn db_table_rows(
         .map(|r| r.get(0))
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
-    // Get rows
-    let data_sql = format!("SELECT * FROM {name} ORDER BY 1 LIMIT {limit} OFFSET {offset}");
+    // Get rows — use row_to_json so PostgreSQL handles all type conversions
+    // (TEXT, INT, TIMESTAMP, BYTEA, JSONB, etc.) natively. This avoids
+    // FromSql panics when trying to get non-JSON columns as serde_json::Value.
+    let data_sql = format!(
+        "SELECT row_to_json(t) FROM (SELECT * FROM {name} LIMIT {limit} OFFSET {offset}) t"
+    );
     let rows = pg.query(&data_sql, &[]).await.map_err(|e| ApiError::InternalError(e.to_string()))?;
     let row_data: Vec<Value> = rows
-        .iter()
+        .into_iter()
         .map(|row| {
-            let mut obj = serde_json::Map::new();
-            for (i, col) in row.columns().iter().enumerate() {
-                let val: Value = row.get::<_, Option<serde_json::Value>>(i)
-                    .unwrap_or(Value::Null);
-                obj.insert(col.name().to_string(), val);
-            }
-            Value::Object(obj)
+            row.get::<_, Option<serde_json::Value>>(0).unwrap_or(Value::Null)
         })
         .collect();
 
@@ -335,25 +333,27 @@ async fn db_query(
     }
 
     if is_select {
-        let rows = pg.query(sql, &[]).await.map_err(|e| {
+        // Wrap the user's query in row_to_json so PostgreSQL handles all
+        // type conversions natively. This avoids FromSql panics on non-JSON
+        // column types (TEXT, INT, TIMESTAMP, BYTEA, etc.).
+        let wrapped = format!(
+            "SELECT row_to_json(t) FROM ({sql}) t"
+        );
+        let rows = pg.query(&wrapped, &[]).await.map_err(|e| {
             warn!("advanced db_query error: {e}");
             ApiError::BadRequest(e.to_string())
         })?;
-        let columns: Vec<String> = rows.first()
-            .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
-            .unwrap_or_default();
         let row_data: Vec<Value> = rows
-            .iter()
+            .into_iter()
             .map(|row| {
-                let mut obj = serde_json::Map::new();
-                for (i, col) in row.columns().iter().enumerate() {
-                    let val: Value = row.get::<_, Option<serde_json::Value>>(i)
-                        .unwrap_or(Value::Null);
-                    obj.insert(col.name().to_string(), val);
-                }
-                Value::Object(obj)
+                row.get::<_, Option<serde_json::Value>>(0).unwrap_or(Value::Null)
             })
             .collect();
+        // Extract column names from the first row's JSON keys
+        let columns: Vec<String> = row_data.first()
+            .and_then(|r| r.as_object())
+            .map(|obj| obj.keys().cloned().collect())
+            .unwrap_or_default();
         Ok(Json(json!({ "columns": columns, "rows": row_data, "row_count": row_data.len() })))
     } else {
         let affected = pg.execute(sql, &[]).await.map_err(|e| {
