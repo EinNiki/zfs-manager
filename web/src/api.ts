@@ -206,7 +206,7 @@ export const api = {
     }),
 
   fsDelete: (path: string) =>
-    request<{ ok: boolean }>(`/advanced/fs/${encodeURIComponent(path)}`, {
+    request<{ ok: boolean }>(`/advanced/fs?path=${encodeURIComponent(path)}`, {
       method: 'DELETE',
     }),
 

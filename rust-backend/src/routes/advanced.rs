@@ -6,7 +6,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    routing::{get, post, delete},
+    routing::{get, post},
     Json,
     Router,
     response::IntoResponse,
@@ -22,9 +22,8 @@ use crate::state::AppState;
 pub fn router(state: AppState) -> Router {
     Router::new()
         // File system
-        .route("/api/v1/advanced/fs", get(fs_list).post(fs_upload))
+        .route("/api/v1/advanced/fs", get(fs_list).post(fs_upload).delete(fs_delete))
         .route("/api/v1/advanced/fs/content", get(fs_read).put(fs_write))
-        .route("/api/v1/advanced/fs/:path", delete(fs_delete))
         // Database
         .route("/api/v1/advanced/db/tables", get(db_tables))
         .route("/api/v1/advanced/db/query", post(db_query))
@@ -163,12 +162,12 @@ async fn fs_write(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// DELETE /api/v1/advanced/fs/:path
+/// DELETE /api/v1/advanced/fs?path=...
 async fn fs_delete(
     State(_state): State<AppState>,
-    Path(path): Path<String>,
+    Query(q): Query<FsReadQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let target = resolve_path(&path)?;
+    let target = resolve_path(&q.path)?;
     if !target.exists() {
         return Err(ApiError::NotFound("path not found".into()));
     }
