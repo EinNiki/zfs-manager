@@ -724,7 +724,6 @@ function ModulesTab() {
   // GitHub token
   const [githubToken, setGithubToken] = useState('');
   const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
-  const [githubTokenMasked, setGithubTokenMasked] = useState<string | null>(null);
   const [githubTokenSaving, setGithubTokenSaving] = useState(false);
   const [githubTokenSaved, setGithubTokenSaved] = useState(false);
 
@@ -732,7 +731,6 @@ function ModulesTab() {
     api.getGithubInterval().then(r => setGithubHours(r.hours)).catch(() => {});
     api.getGithubToken().then(r => {
       setGithubTokenConfigured(r.configured);
-      setGithubTokenMasked(r.masked);
     }).catch(() => {});
   }, []);
 
@@ -755,12 +753,6 @@ function ModulesTab() {
       const r = await api.setGithubToken(githubToken);
       setGithubTokenConfigured(r.configured);
       setGithubToken('');
-      if (r.configured) {
-        const fresh = await api.getGithubToken();
-        setGithubTokenMasked(fresh.masked);
-      } else {
-        setGithubTokenMasked(null);
-      }
       setGithubTokenSaved(true);
       setTimeout(() => setGithubTokenSaved(false), 3000);
     } catch { /* ignore */ }
@@ -830,15 +822,6 @@ function ModulesTab() {
             <CheckCircle size={14} style={{ color: 'var(--green)' }} />
             <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-secondary)' }}>
               Token saved.
-            </span>
-          </div>
-        )}
-
-        {githubTokenConfigured && !githubTokenSaved && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 12px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius)' }}>
-            <CheckCircle size={14} style={{ color: 'var(--green)' }} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)' }}>
-              Token configured: {githubTokenMasked}
             </span>
           </div>
         )}
