@@ -547,6 +547,7 @@ async fn run_history(
 #[derive(Deserialize)]
 struct SwitchVersionBody {
     version: String,
+    #[serde(default)]
     wasm_url: String,
 }
 
@@ -596,6 +597,33 @@ async fn switch_version(
     // Update version
     manifest.version = body.version.clone();
 
+    // Determine the WASM download URL.
+    // Priority: body.wasm_url (from GitHub release asset) → registry entry wasm_url
+    let mut wasm_url = body.wasm_url.trim().to_string();
+    if wasm_url.is_empty() {
+        // Fall back to registry's wasm_url, replacing "latest" with the target version
+        if let Some(ref reg_url) = registry_url {
+            if let Ok(index) = registry::fetch_index_cached(reg_url, &state.redis).await {
+                if let Some(entry) = index.modules.iter().find(|m| m.id == id) {
+                    let reg_wasm = entry.wasm_url.clone();
+                    // Replace /releases/latest/download/ with /releases/download/<version>/
+                    if reg_wasm.contains("/releases/latest/download/") {
+                        wasm_url = reg_wasm.replace(
+                            "/releases/latest/download/",
+                            &format!("/releases/download/{}/", body.version),
+                        );
+                    } else {
+                        wasm_url = reg_wasm;
+                    }
+                    tracing::info!("switch_version: body.wasm_url was empty, using registry wasm_url: {}", wasm_url);
+                }
+            }
+        }
+    }
+    if wasm_url.is_empty() {
+        return Err(ApiError::BadRequest("no wasm_url provided and no registry fallback available".into()));
+    }
+
     // Download the new WASM
     // Use redirect::Policy::none() so we can preserve the Authorization
     // header across GitHub's cross-host redirects (github.com → objects.githubusercontent.com)
@@ -607,7 +635,8 @@ async fn switch_version(
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
     let auth = crate::modules::github_token::auth_header().await;
-    let mut current_url = body.wasm_url.clone();
+    tracing::info!("switch_version: auth header present: {}", auth.is_some());
+    let mut current_url = wasm_url;
     let wasm: Vec<u8>;
 
     loop {
@@ -615,31 +644,43 @@ async fn switch_version(
         let parsed = reqwest::Url::parse(&current_url)
             .map_err(|e| ApiError::BadRequest(format!("invalid wasm url: {e}")))?;
         let host = parsed.host_str().unwrap_or("");
-        if host.ends_with("github.com") || host.ends_with("githubusercontent.com") {
+        let is_github = host.ends_with("github.com") || host.ends_with("githubusercontent.com");
+        if is_github {
             if let Some((ref k, ref v)) = auth {
                 wasm_req = wasm_req.header(k, v);
             }
         }
+        tracing::info!(
+            "switch_version: downloading wasm from {} (host={}, auth={}, token_set={})",
+            current_url, host, is_github && auth.is_some(), auth.is_some()
+        );
         let wasm_resp = wasm_req.send().await
             .map_err(|e| ApiError::BadRequest(format!("failed to download wasm: {e}")))?;
 
-        if wasm_resp.status().is_success() {
+        let status = wasm_resp.status();
+        tracing::info!("switch_version: wasm download response status: {}", status);
+
+        if status.is_success() {
             wasm = wasm_resp.bytes().await
                 .map_err(|e| ApiError::BadRequest(format!("failed to read wasm: {e}")))?
                 .to_vec();
             break;
-        } else if wasm_resp.status().is_redirection() {
+        } else if status.is_redirection() {
             let location = wasm_resp.headers().get("location")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string())
                 .ok_or_else(|| ApiError::BadRequest("wasm download: redirect without location".to_string()))?;
+            tracing::info!("switch_version: following redirect to {}", location);
             current_url = if location.starts_with("http://") || location.starts_with("https://") {
                 location
             } else {
                 parsed.join(&location).map(|u| u.to_string()).unwrap_or(location)
             };
         } else {
-            return Err(ApiError::BadRequest(format!("wasm download returned {}", wasm_resp.status())));
+            // Log response body for debugging
+            let body_text = wasm_resp.text().await.unwrap_or_default();
+            tracing::warn!("switch_version: wasm download failed with status {} from {}. Response: {}", status, current_url, &body_text[..body_text.len().min(500)]);
+            return Err(ApiError::BadRequest(format!("wasm download returned {} (url: {})", status, current_url)));
         }
     }
     if wasm.len() > MAX_WASM_BYTES {
