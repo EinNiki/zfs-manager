@@ -185,13 +185,27 @@ async fn discover_registry(
     Json(body): Json<DiscoverRegistryBody>,
 ) -> Result<Json<Value>, ApiError> {
     mgmt_rate_limit(&state, &headers)?;
-    let input = body.url.trim().trim_end_matches('/').to_string();
-    if input.is_empty() {
+    let raw_input = body.url.trim().trim_end_matches('/').to_string();
+    if raw_input.is_empty() {
         return Err(ApiError::BadRequest("URL is required".into()));
     }
 
-    let parsed = reqwest::Url::parse(&input)
-        .map_err(|e| ApiError::BadRequest(format!("invalid url: {e}")))?;
+    // If no scheme is given, try https:// first, then http://
+    let input = if raw_input.starts_with("http://") || raw_input.starts_with("https://") {
+        raw_input.clone()
+    } else {
+        format!("https://{raw_input}")
+    };
+
+    let parsed = match reqwest::Url::parse(&input) {
+        Ok(u) => u,
+        Err(_) => {
+            // https failed to parse — try http
+            let http_input = format!("http://{raw_input}");
+            reqwest::Url::parse(&http_input)
+                .map_err(|e| ApiError::BadRequest(format!("invalid url: {e}")))?
+        }
+    };
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(ApiError::BadRequest("url must be http(s)".into()));
     }
@@ -335,7 +349,13 @@ async fn add_registry(
     Json(body): Json<AddRegistryBody>,
 ) -> Result<Json<Value>, ApiError> {
     mgmt_rate_limit(&state, &headers)?;
-    let url = body.url.trim().trim_matches('"').trim_matches('\'').trim().to_string();
+    let raw_url = body.url.trim().trim_matches('"').trim_matches('\'').trim().to_string();
+    // If no scheme is given, prepend https://
+    let url = if raw_url.starts_with("http://") || raw_url.starts_with("https://") {
+        raw_url
+    } else {
+        format!("https://{raw_url}")
+    };
     let default_url = registry::default_registry_url();
     if url == default_url {
         return Err(ApiError::BadRequest("This URL is already active as the default registry".into()));
