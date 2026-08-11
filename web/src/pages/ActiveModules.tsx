@@ -9,7 +9,6 @@ import { ActiveModule, ModuleRun, StoreModule } from '../types';
 import ModuleConfigForm from '../components/ModuleConfigForm';
 import PageTransition from '../components/PageTransition';
 import ConfirmDialog from '../components/ConfirmDialog';
-import ModuleDatabaseSection from '../components/ModuleDatabaseSection';
 import { useNotifications } from '../context/NotificationContext';
 import { getActiveModulesCached, getModuleStoreCached, isUpdateAvailable } from '../utils/moduleCache';
 
@@ -309,8 +308,6 @@ export default function ActiveModules() {
                   module={mod}
                   onSave={(config, secrets) => saveConfig(mod, config, secrets)}
                 />
-
-                <ModuleDatabaseSection moduleId={mod.id} />
 
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>

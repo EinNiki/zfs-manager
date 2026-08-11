@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import { Database, Server, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { api } from '../api';
 import { useNotifications } from '../context/NotificationContext';
@@ -17,16 +17,23 @@ const labelStyle: React.CSSProperties = {
   letterSpacing: '0.06em', marginBottom: 6,
 };
 
+/// Ref handle: allows the parent to trigger the database save.
+export interface DatabaseSectionRef {
+  save: () => Promise<void>;
+}
+
 /**
  * Per-module database selection: each module can either use the internal
  * PostgreSQL (default) or its own external database connection.
+ *
+ * The save buttons have been removed — the parent (ModuleConfigForm)
+ * triggers save() via a ref when "Save configuration" is clicked.
  */
-export default function ModuleDatabaseSection({ moduleId }: { moduleId: string }) {
+const ModuleDatabaseSection = forwardRef<DatabaseSectionRef, { moduleId: string }>(({ moduleId }, ref) => {
   const { notify } = useNotifications();
   const [mode, setMode] = useState<'internal' | 'external'>('internal');
   const [form, setForm] = useState({ host: '', port: 5432, username: '', database: '', password: '' });
   const [hasPassword, setHasPassword] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -56,39 +63,27 @@ export default function ModuleDatabaseSection({ moduleId }: { moduleId: string }
   }, [moduleId]);
 
   const save = async () => {
-    setSaving(true);
-    try {
-      const res = await api.updateModuleDatabase(
-        moduleId,
-        mode === 'internal'
-          ? { mode: 'internal' }
-          : {
-              mode: 'external',
-              external: {
-                host: form.host.trim(),
-                port: Number(form.port) || 5432,
-                username: form.username.trim(),
-                database: form.database.trim(),
-                ...(form.password ? { password: form.password } : {}),
-              },
-            }
-      );
-      setHasPassword(res.external.has_password);
-      setForm(f => ({ ...f, password: '' }));
-      notify({
-        type: 'success',
-        title: 'Module Database',
-        message: mode === 'internal'
-          ? 'Interne PostgreSQL-Datenbank aktiviert.'
-          : 'Externe Datenbankverbindung gespeichert.',
-        toastOnly: true,
-      });
-    } catch (err) {
-      notify({ type: 'error', title: 'Module Database', message: `Speichern fehlgeschlagen: ${(err as Error).message}` });
-    } finally {
-      setSaving(false);
-    }
+    const res = await api.updateModuleDatabase(
+      moduleId,
+      mode === 'internal'
+        ? { mode: 'internal' }
+        : {
+            mode: 'external',
+            external: {
+              host: form.host.trim(),
+              port: Number(form.port) || 5432,
+              username: form.username.trim(),
+              database: form.database.trim(),
+              ...(form.password ? { password: form.password } : {}),
+            },
+          }
+    );
+    setHasPassword(res.external.has_password);
+    setForm(f => ({ ...f, password: '' }));
   };
+
+  // Expose save to parent via ref
+  useImperativeHandle(ref, () => ({ save }));
 
   const test = async () => {
     setTesting(true);
@@ -163,14 +158,6 @@ export default function ModuleDatabaseSection({ moduleId }: { moduleId: string }
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-secondary)', flex: 1, minWidth: 200 }}>
             Internes <strong style={{ color: 'var(--text-primary)' }}>PostgreSQL</strong> (Standard) — dieses Modul speichert seine Daten in der eingebetteten Datenbank.
           </span>
-          <button
-            className="btn btn-primary"
-            style={{ flexShrink: 0, height: 30, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, opacity: saving ? 0.6 : 1 }}
-            disabled={saving}
-            onClick={save}
-          >
-            {saving ? <Loader2 size={12} className="spin" /> : <CheckCircle size={12} />} Übernehmen
-          </button>
         </div>
       ) : (
         <>
@@ -239,15 +226,6 @@ export default function ModuleDatabaseSection({ moduleId }: { moduleId: string }
               {testing ? <Loader2 size={12} className="spin" /> : <Server size={12} />}
               {testing ? 'Teste…' : 'Verbindung testen'}
             </button>
-            <button
-              className="btn btn-primary"
-              style={{ height: 30, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, opacity: saving ? 0.6 : 1 }}
-              disabled={saving || !form.host.trim() || !form.username.trim() || !form.database.trim()}
-              onClick={save}
-            >
-              {saving ? <Loader2 size={12} className="spin" /> : <CheckCircle size={12} />}
-              {saving ? 'Speichern…' : 'Speichern'}
-            </button>
             {testResult && (
               <span style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -266,4 +244,8 @@ export default function ModuleDatabaseSection({ moduleId }: { moduleId: string }
       )}
     </div>
   );
-}
+});
+
+ModuleDatabaseSection.displayName = 'ModuleDatabaseSection';
+
+export default ModuleDatabaseSection;

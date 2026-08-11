@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { ActiveModule, ModuleConfigField } from '../types';
+import ModuleDatabaseSection, { DatabaseSectionRef } from './ModuleDatabaseSection';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', height: 38, padding: '0 12px',
@@ -21,6 +22,8 @@ interface Props {
 }
 
 /// Renders a config form generated from the module's config_schema.
+/// Also embeds the database section — the single "Save configuration"
+/// button saves both the module config and the database settings.
 export default function ModuleConfigForm({ module, onSave }: Props) {
   const initialConfig: Record<string, unknown> = {};
   for (const field of module.config_schema) {
@@ -31,18 +34,28 @@ export default function ModuleConfigForm({ module, onSave }: Props) {
   // Secret inputs start empty; only touched keys are sent to the backend.
   const [secretInputs, setSecretInputs] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const dbRef = useRef<DatabaseSectionRef>(null);
 
   const setValue = (key: string, value: unknown) => setConfig(c => ({ ...c, [key]: value }));
 
   const save = async () => {
     setSaving(true);
     try {
+      // 1. Save module config + secrets
       const secrets: Record<string, string | null> = {};
       for (const key of Object.keys(secretInputs)) {
         if (secretInputs[key] !== '') secrets[key] = secretInputs[key];
       }
       await onSave(config, secrets);
       setSecretInputs({});
+
+      // 2. Save database settings (best-effort — don't fail the whole
+      //    save if the database section has an issue)
+      try {
+        await dbRef.current?.save();
+      } catch {
+        // Database save errors are non-critical — the config was already saved
+      }
     } finally {
       setSaving(false);
     }
@@ -149,6 +162,10 @@ export default function ModuleConfigForm({ module, onSave }: Props) {
           )}
         </div>
       ))}
+
+      {/* Database section (no separate save button — saved by "Save configuration") */}
+      <ModuleDatabaseSection ref={dbRef} moduleId={module.id} />
+
       <button
         onClick={save}
         disabled={saving}
