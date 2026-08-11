@@ -177,6 +177,9 @@ struct DiscoverRegistryBody {
 ///   - master branch: same three (fallback)
 /// For any other URL that doesn't end in .json, it tries appending
 /// index.json and registry/index.json.
+///
+/// Returns the found URLs along with their module data so the frontend
+/// can do duplicate checking without making cross-origin requests.
 async fn discover_registry(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -213,25 +216,28 @@ async fn discover_registry(
             match resp {
                 Ok(r) if r.status().is_success() => {
                     let text = r.text().await.unwrap_or_default();
-                    // Validate it's a proper registry index
                     match serde_json::from_str::<Value>(&text) {
                         Ok(v) if v.get("modules").and_then(|m| m.as_array()).is_some() => {
-                            Some((url, true))
+                            Some((url, true, v))
                         }
-                        _ => Some((url, false)),
+                        _ => Some((url, false, Value::Null)),
                     }
                 }
-                _ => Some((url, false)),
+                _ => Some((url, false, Value::Null)),
             }
         });
     }
 
-    let mut found_valid: Vec<String> = Vec::new();
+    let mut found: Vec<Value> = Vec::new();
     let mut found_invalid: Vec<String> = Vec::new();
     while let Some(res) = join_set.join_next().await {
-        if let Ok(Some((url, is_valid))) = res {
+        if let Ok(Some((url, is_valid, data))) = res {
             if is_valid {
-                found_valid.push(url);
+                let modules = data.get("modules").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+                found.push(json!({
+                    "url": url,
+                    "modules": modules,
+                }));
             } else {
                 found_invalid.push(url);
             }
@@ -239,13 +245,13 @@ async fn discover_registry(
     }
 
     // Sort for stable ordering
-    found_valid.sort();
+    found.sort_by_key(|f| f["url"].as_str().unwrap_or("").to_string());
     found_invalid.sort();
 
     Ok(Json(json!({
         "input": input,
         "candidates_checked": candidates.len(),
-        "found": found_valid,
+        "found": found,
         "invalid": found_invalid,
     })))
 }

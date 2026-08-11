@@ -79,10 +79,11 @@ export default function ModuleStore() {
 
   // Registry Discovery State
   const [discovering, setDiscovering] = useState(false);
-  const [discoveryResults, setDiscoveryResults] = useState<string[] | null>(null);
+  const [discoveryResults, setDiscoveryResults] = useState<Array<{ url: string; modules: any[] }> | null>(null);
   const [discoveryInput, setDiscoveryInput] = useState('');
   const [showDiscoveryModal, setShowDiscoveryModal] = useState(false);
   const [selectedDiscoveryUrl, setSelectedDiscoveryUrl] = useState('');
+  const [selectedDiscoveryModules, setSelectedDiscoveryModules] = useState<any[]>([]);
   const [addingRegistry, setAddingRegistry] = useState(false);
 
   const filterAndSetModules = (rawMods: StoreModule[], selections: Record<string, string>) => {
@@ -295,13 +296,9 @@ export default function ModuleStore() {
       return;
     }
 
-    // If it's a direct .json file URL, skip discovery and add directly
-    if (url.toLowerCase().endsWith('.json')) {
-      await addRegistryDirect(url);
-      return;
-    }
-
-    // Otherwise, discover candidate index files
+    // Always use the discovery endpoint — it handles both direct .json URLs
+    // and repo URLs, and returns the module data so we don't need to make
+    // cross-origin requests from the browser (which would hit CORS).
     setDiscovering(true);
     setDiscoveryInput(url);
     try {
@@ -315,12 +312,14 @@ export default function ModuleStore() {
       } else if (res.found.length === 1) {
         // Single match — show confirmation modal
         setDiscoveryResults(res.found);
-        setSelectedDiscoveryUrl(res.found[0]);
+        setSelectedDiscoveryUrl(res.found[0].url);
+        setSelectedDiscoveryModules(res.found[0].modules);
         setShowDiscoveryModal(true);
       } else {
         // Multiple matches — let user pick
         setDiscoveryResults(res.found);
-        setSelectedDiscoveryUrl(res.found[0]);
+        setSelectedDiscoveryUrl(res.found[0].url);
+        setSelectedDiscoveryModules(res.found[0].modules);
         setShowDiscoveryModal(true);
       }
     } catch (err) {
@@ -330,22 +329,14 @@ export default function ModuleStore() {
     }
   };
 
-  /// Adds a registry URL directly (for direct .json URLs or after discovery confirmation)
-  const addRegistryDirect = async (url: string) => {
+  /// Adds a registry URL after discovery confirmation.
+  /// Uses the module data from the discovery response for duplicate checking —
+  /// no cross-origin fetch from the browser.
+  const addRegistryDirect = async (url: string, modules: any[]) => {
     setAddingRegistry(true);
     setLoading(true);
     try {
-      // Preview candidate registry index to check for duplicates BEFORE adding to DB
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}: Invalid registry index URL`);
-      }
-      const candidateData = await resp.json();
-      if (!candidateData || !Array.isArray(candidateData.modules)) {
-        throw new Error('Invalid registry index file');
-      }
-
-      const candidateModules: StoreModule[] = candidateData.modules.map((m: any) => ({
+      const candidateModules: StoreModule[] = modules.map((m: any) => ({
         ...m,
         registry_url: url,
         installed: false,
@@ -400,15 +391,18 @@ export default function ModuleStore() {
 
   const confirmDiscoverySelection = async () => {
     if (!selectedDiscoveryUrl) return;
+    const modules = selectedDiscoveryModules;
+    const url = selectedDiscoveryUrl;
     setShowDiscoveryModal(false);
     setDiscoveryResults(null);
-    await addRegistryDirect(selectedDiscoveryUrl);
+    await addRegistryDirect(url, modules);
   };
 
   const cancelDiscovery = () => {
     setShowDiscoveryModal(false);
     setDiscoveryResults(null);
     setSelectedDiscoveryUrl('');
+    setSelectedDiscoveryModules([]);
     notify({ type: 'info', title: 'Module Store', message: 'Registry discovery cancelled.' });
   };
 
@@ -669,12 +663,15 @@ export default function ModuleStore() {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {discoveryResults.map(url => {
-                    const isSelected = selectedDiscoveryUrl === url;
+                  {discoveryResults.map(entry => {
+                    const isSelected = selectedDiscoveryUrl === entry.url;
                     return (
                       <div
-                        key={url}
-                        onClick={() => setSelectedDiscoveryUrl(url)}
+                        key={entry.url}
+                        onClick={() => {
+                          setSelectedDiscoveryUrl(entry.url);
+                          setSelectedDiscoveryModules(entry.modules);
+                        }}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 10,
                           padding: '12px 14px',
@@ -694,9 +691,14 @@ export default function ModuleStore() {
                         }}>
                           {isSelected && <CheckCircle size={12} color="#fff" />}
                         </div>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
-                          {url}
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, overflow: 'hidden' }}>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+                            {entry.url}
+                          </span>
+                          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, color: 'var(--text-muted)' }}>
+                            {entry.modules.length} module{entry.modules.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
                       </div>
                     );
                   })}

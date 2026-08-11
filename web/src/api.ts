@@ -295,7 +295,12 @@ export const api = {
     }),
 
   discoverRegistry: (url: string) =>
-    request<{ input: string; candidates_checked: number; found: string[]; invalid: string[] }>('/modules/registries/discover', {
+    request<{
+      input: string;
+      candidates_checked: number;
+      found: Array<{ url: string; modules: any[] }>;
+      invalid: string[];
+    }>('/modules/registries/discover', {
       method: 'POST',
       body: JSON.stringify({ url }),
     }),
