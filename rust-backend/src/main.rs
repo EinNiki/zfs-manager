@@ -51,8 +51,11 @@ async fn auth_middleware(
 ) -> Result<Response, StatusCode> {
     let path = req.uri().path().to_string();
 
-    // Allow health and login without auth
-    if path.ends_with("/health") || path.ends_with("/auth/login") {
+    // Allow health, login, and accent-color GET without auth (not sensitive)
+    if path.ends_with("/health")
+        || path.ends_with("/auth/login")
+        || (path == "/api/v1/settings/accent-color" && req.method() == axum::http::Method::GET)
+    {
         return Ok(next.run(req).await);
     }
 
@@ -409,6 +412,8 @@ async fn main() {
             .await;
         // Load GitHub token from DB or env var for API auth + private repos
         modules::github_token::init(Some(pg)).await;
+        // Load accent color into in-memory cache
+        routes::settings::init_accent_color_cache(pg).await;
     }
 
     let app_state = AppState {

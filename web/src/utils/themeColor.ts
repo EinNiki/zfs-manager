@@ -58,15 +58,26 @@ export async function setAccentColor(hex: string) {
 
 /** Apply the stored color on app startup. Also syncs from backend. */
 export function initAccentColor() {
+  // 1. Apply from localStorage synchronously — instant, no network, no flash
   const color = getAccentColor();
   applyAccentColor(color);
-  // Sync from backend (in case it was changed on another device)
-  api.getAccentColor().then(r => {
-    if (r.color && r.color !== color) {
-      localStorage.setItem(STORAGE_KEY, r.color);
-      applyAccentColor(r.color);
-    }
-  }).catch(() => {});
+
+  // 2. Defer backend sync to idle time so it never blocks page load.
+  //    Uses requestIdleCallback if available, falls back to setTimeout.
+  const syncFromBackend = () => {
+    api.getAccentColor().then(r => {
+      if (r.color && r.color.toLowerCase() !== color.toLowerCase()) {
+        localStorage.setItem(STORAGE_KEY, r.color);
+        applyAccentColor(r.color);
+      }
+    }).catch(() => {});
+  };
+
+  if ('requestIdleCallback' in window) {
+    (window as any).requestIdleCallback(syncFromBackend, { timeout: 2000 });
+  } else {
+    setTimeout(syncFromBackend, 0);
+  }
 }
 
 /** Preset colors for the picker. */

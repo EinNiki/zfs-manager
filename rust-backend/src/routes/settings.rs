@@ -7,9 +7,32 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Sha256, Digest};
 use rand::Rng;
+use std::sync::LazyLock;
+use tokio::sync::RwLock;
 
 use crate::state::AppState;
 use crate::error::ApiError;
+
+/// In-memory cache for the accent color so GET doesn't hit PostgreSQL on
+/// every page load. Loaded once at startup, updated on PUT.
+static ACCENT_COLOR_CACHE: LazyLock<RwLock<Option<String>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+/// Load the accent color from DB into memory at startup.
+pub async fn init_accent_color_cache(pg: &tokio_postgres::Client) {
+    if let Ok(row) = pg
+        .query_opt("SELECT value FROM app_settings WHERE key = 'accent_color'", &[])
+        .await
+    {
+        if let Some(r) = row {
+            if let Some(color) = r.get::<_, Value>(0).as_str() {
+                *ACCENT_COLOR_CACHE.write().await = Some(color.to_string());
+                return;
+            }
+        }
+    }
+    *ACCENT_COLOR_CACHE.write().await = Some("#6366f1".to_string());
+}
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -289,19 +312,13 @@ async fn set_github_token(
 // ── Accent color ─────────────────────────────────────────────────────────────
 
 /// GET /api/v1/settings/accent-color
+/// Reads from in-memory cache — no PostgreSQL hit. Public (no auth).
 async fn get_accent_color(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Result<Json<Value>, ApiError> {
-    let pg = state.pg.as_ref().ok_or_else(|| ApiError::InternalError("Database unavailable".into()))?;
-    let row = pg
-        .query_opt("SELECT value FROM app_settings WHERE key = 'accent_color'", &[])
-        .await
-        .map_err(|e| ApiError::InternalError(e.to_string()))?;
-
-    let color = row
-        .and_then(|r| r.get::<_, Value>(0).as_str().map(|s| s.to_string()))
+    let color = ACCENT_COLOR_CACHE.read().await
+        .clone()
         .unwrap_or_else(|| "#6366f1".to_string());
-
     Ok(Json(json!({ "color": color })))
 }
 
@@ -311,6 +328,7 @@ struct SetAccentColorBody {
 }
 
 /// PUT /api/v1/settings/accent-color
+/// Updates DB and in-memory cache.
 async fn set_accent_color(
     State(state): State<AppState>,
     Json(body): Json<SetAccentColorBody>,
@@ -328,6 +346,9 @@ async fn set_accent_color(
     )
     .await
     .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+    // Update in-memory cache
+    *ACCENT_COLOR_CACHE.write().await = Some(color.clone());
 
     Ok(Json(json!({ "color": color })))
 }
