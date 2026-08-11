@@ -435,6 +435,8 @@ async fn main() {
         modules::github_token::init(Some(pg)).await;
         // Load accent color into in-memory cache
         routes::settings::init_accent_color_cache(pg).await;
+        // Migrate any existing on-disk WASM artifacts into PostgreSQL
+        startup::migrate_wasm_to_db(pg).await;
     }
 
     // Generate a random internal token for WASM module → dashboard API auth.

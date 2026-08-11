@@ -9,6 +9,32 @@ use super::runtime::{ModuleCtx, RunLimits, RunOutcome};
 use super::{registry, secrets};
 use crate::state::AppState;
 
+/// Fallback: load WASM from disk when not in DB (backward compat for
+/// modules installed before wasm_bytes column was added).
+fn load_wasm_from_disk(module_id: &str) -> Result<Vec<u8>, String> {
+    let wasm_path = registry::wasm_path(module_id).ok_or("invalid module id")?;
+    let modules_dir = registry::modules_dir();
+    std::fs::read(&wasm_path).map_err(|e| {
+        let files: Vec<String> = std::fs::read_dir(&modules_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        warn!(
+            "module {module_id}: wasm not in DB and not on disk at {wasm_path}: {e}\n\
+             modules_dir={modules_dir}\n\
+             existing files={files:?}"
+        );
+        format!(
+            "wasm artifact missing: {e} (path: {wasm_path}, modules_dir: {modules_dir}, existing files: {files:?}). \
+             Re-install the module to persist its WASM in the database."
+        )
+    })
+}
+
 /// Executes one run of an installed module and records it in `module_runs`.
 /// Returns the run id together with the outcome.
 pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) -> Result<(i64, RunOutcome), String> {
@@ -76,29 +102,30 @@ pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) ->
     debug!("module {module_id}: allowlist = {:?}", allowlist);
     debug!("module {module_id}: config = {}", config);
 
-    let wasm_path = registry::wasm_path(module_id).ok_or("invalid module id")?;
-    debug!("module {module_id}: wasm_path = {}", wasm_path);
-    // Check if the file exists before reading, so we can log a more
-    // helpful error message including the modules directory listing.
-    let wasm = tokio::fs::read(&wasm_path)
-        .await
-        .map_err(|e| {
-            let modules_dir = registry::modules_dir();
-            let files: Vec<String> = std::fs::read_dir(&modules_dir)
-                .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .map(|e| e.file_name().to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            warn!(
-                "module {module_id}: wasm artifact not found at {wasm_path}: {e}\n\
-                 modules_dir={modules_dir}\n\
-                 existing files={files:?}"
-            );
-            format!("wasm artifact missing: {e} (path: {wasm_path}, modules_dir: {modules_dir}, existing files: {files:?})")
-        })?;
+    // Load WASM bytes. Primary source: PostgreSQL (survives container restarts).
+    // Fallback: disk file at /app/modules/<id>.wasm (for backward compat).
+    let wasm: Vec<u8> = {
+        let row = pg
+            .query_opt("SELECT wasm_bytes FROM modules WHERE id = $1", &[&module_id])
+            .await
+            .map_err(|e| format!("db error: {e}"))?;
+        if let Some(row) = row {
+            let wasm_bytes: Option<Vec<u8>> = row.get(0);
+            if let Some(bytes) = wasm_bytes {
+                if !bytes.is_empty() {
+                    debug!("module {module_id}: loaded {} bytes from DB", bytes.len());
+                    bytes
+                } else {
+                    // DB has NULL/empty wasm_bytes — try disk fallback
+                    load_wasm_from_disk(module_id)?
+                }
+            } else {
+                load_wasm_from_disk(module_id)?
+            }
+        } else {
+            return Err(format!("module {module_id:?} not found in DB"));
+        }
+    };
     debug!("module {module_id}: wasm loaded, {} bytes", wasm.len());
 
     let run_id: i64 = pg

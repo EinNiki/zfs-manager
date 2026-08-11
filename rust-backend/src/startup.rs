@@ -54,6 +54,61 @@ pub async fn run_startup_pool_imports() {
     }
 }
 
+/// Create the modules directory and migrate any existing on-disk WASM
+/// artifacts into PostgreSQL so they survive container restarts/rebuilds.
+pub async fn migrate_wasm_to_db(pg: &tokio_postgres::Client) {
+    use crate::modules::registry;
+
+    // Ensure the modules directory exists
+    let modules_dir = registry::modules_dir();
+    let _ = fs::create_dir_all(&modules_dir);
+
+    // Find modules in DB that have no wasm_bytes but do have a disk file
+    let rows = match pg
+        .query("SELECT id FROM modules WHERE wasm_bytes IS NULL", &[])
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("wasm migration: failed to query modules: {e}");
+            return;
+        }
+    };
+
+    if rows.is_empty() {
+        return;
+    }
+
+    let mut migrated = 0;
+    for row in &rows {
+        let module_id: String = row.get(0);
+        if let Some(wasm_path) = registry::wasm_path(&module_id) {
+            if let Ok(wasm_bytes) = fs::read(&wasm_path) {
+                if !wasm_bytes.is_empty() {
+                    match pg
+                        .execute(
+                            "UPDATE modules SET wasm_bytes = $1 WHERE id = $2 AND wasm_bytes IS NULL",
+                            &[&wasm_bytes, &module_id],
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            info!("wasm migration: migrated {} ({} bytes) from disk to DB", module_id, wasm_bytes.len());
+                            migrated += 1;
+                        }
+                        Err(e) => warn!("wasm migration: failed to migrate {}: {e}", module_id),
+                    }
+                }
+            } else {
+                warn!("wasm migration: {} has no wasm_bytes in DB and no disk file — re-install needed", module_id);
+            }
+        }
+    }
+    if migrated > 0 {
+        info!("wasm migration: migrated {migrated} module(s) from disk to DB");
+    }
+}
+
 pub async fn run_startup_checks() {
     info!("🚀 Starting ZFS Dashboard Diagnostic Checks...");
 

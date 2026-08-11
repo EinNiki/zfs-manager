@@ -44,7 +44,7 @@ fn db(state: &AppState) -> Result<&std::sync::Arc<tokio_postgres::Client>, ApiEr
     state.pg.as_ref().ok_or(ApiError::InternalError("database unavailable".into()))
 }
 
-/// Persists a validated package: wasm to disk, module + empty config to DB.
+/// Persists a validated package: wasm to DB + disk, module + empty config to DB.
 async fn register_module(
     state: &AppState,
     package: registry::ModulePackage,
@@ -59,31 +59,31 @@ async fn register_module(
         .validate_component(&package.wasm)
         .map_err(ApiError::BadRequest)?;
 
-    tokio::fs::create_dir_all(registry::modules_dir())
-        .await
-        .map_err(|e| ApiError::InternalError(format!("cannot create modules dir: {e}")))?;
+    // Write to disk (best-effort — DB is the primary store now)
     let wasm_path = registry::wasm_path(&package.manifest.id)
         .ok_or(ApiError::BadRequest("invalid module id".into()))?;
-    tokio::fs::write(&wasm_path, &package.wasm)
-        .await
-        .map_err(|e| ApiError::InternalError(format!("cannot store wasm: {e}")))?;
+    if tokio::fs::create_dir_all(registry::modules_dir()).await.is_ok() {
+        let _ = tokio::fs::write(&wasm_path, &package.wasm).await;
+    }
 
     let manifest_json = serde_json::to_value(&package.manifest)
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
     let m = &package.manifest;
     let pg = db(state)?;
+    let wasm_bytes: &[u8] = &package.wasm;
     pg.execute(
-        "INSERT INTO modules(id, name, version, author, description, icon, repository_url, source, registry_url, wasm_sha256, manifest)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        "INSERT INTO modules(id, name, version, author, description, icon, repository_url, source, registry_url, wasm_sha256, manifest, wasm_bytes)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT (id) DO UPDATE SET
              name = EXCLUDED.name, version = EXCLUDED.version, author = EXCLUDED.author,
              description = EXCLUDED.description, icon = EXCLUDED.icon,
              repository_url = EXCLUDED.repository_url, source = EXCLUDED.source,
              registry_url = EXCLUDED.registry_url, wasm_sha256 = EXCLUDED.wasm_sha256,
-             manifest = EXCLUDED.manifest",
+             manifest = EXCLUDED.manifest, wasm_bytes = EXCLUDED.wasm_bytes",
         &[
             &m.id, &m.name, &m.version, &m.author, &m.description, &m.icon,
             &m.repository_url, &source, &registry_url, &package.wasm_sha256, &manifest_json,
+            &wasm_bytes,
         ],
     )
     .await
@@ -648,24 +648,22 @@ async fn switch_version(
         .validate_component(&wasm)
         .map_err(ApiError::BadRequest)?;
 
-    // Write WASM to disk
-    tokio::fs::create_dir_all(registry::modules_dir())
-        .await
-        .map_err(|e| ApiError::InternalError(format!("cannot create modules dir: {e}")))?;
+    // Write WASM to disk (best-effort) and DB (primary store)
     let wasm_path = registry::wasm_path(&id)
         .ok_or(ApiError::BadRequest("invalid module id".into()))?;
-    tokio::fs::write(&wasm_path, &wasm)
-        .await
-        .map_err(|e| ApiError::InternalError(format!("cannot store wasm: {e}")))?;
+    if tokio::fs::create_dir_all(registry::modules_dir()).await.is_ok() {
+        let _ = tokio::fs::write(&wasm_path, &wasm).await;
+    }
 
     let wasm_sha256 = registry::sha256_hex(&wasm);
     let manifest_json = serde_json::to_value(&manifest)
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
+    let wasm_bytes: &[u8] = &wasm;
 
     // Update DB — preserves config, secrets, run history
     pg.execute(
-        "UPDATE modules SET version = $1, wasm_sha256 = $2, manifest = $3 WHERE id = $4",
-        &[&manifest.version, &wasm_sha256, &manifest_json, &id],
+        "UPDATE modules SET version = $1, wasm_sha256 = $2, manifest = $3, wasm_bytes = $4 WHERE id = $5",
+        &[&manifest.version, &wasm_sha256, &manifest_json, &wasm_bytes, &id],
     )
     .await
     .map_err(|e| ApiError::InternalError(e.to_string()))?;
