@@ -271,22 +271,13 @@ async fn set_github_interval(
 // ── GitHub token ─────────────────────────────────────────────────────────────
 
 /// GET /api/v1/settings/github-token
-/// Returns whether a GitHub token is configured (never returns the token itself).
+/// Returns only whether a GitHub token is configured (never the token itself
+/// or any part of it — no masked prefix to avoid leaking token fragments).
 async fn get_github_token(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Result<Json<Value>, ApiError> {
-    let _ = state; // AppState not needed — token is in global state
     let token = crate::modules::github_token::get().await;
-    let configured = token.is_some();
-    // Return a masked prefix so the UI can show which token is set
-    let masked = token.map(|t| {
-        if t.len() <= 8 {
-            "••••".to_string()
-        } else {
-            format!("{}…{}", &t[..4], &t[t.len()-4..])
-        }
-    });
-    Ok(Json(json!({ "configured": configured, "masked": masked })))
+    Ok(Json(json!({ "configured": token.is_some() })))
 }
 
 #[derive(Deserialize)]

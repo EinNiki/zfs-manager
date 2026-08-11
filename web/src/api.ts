@@ -152,7 +152,7 @@ export const api = {
     }),
 
   getGithubToken: () =>
-    request<{ configured: boolean; masked: string | null }>('/settings/github-token'),
+    request<{ configured: boolean }>('/settings/github-token'),
 
   setGithubToken: (token: string) =>
     request<{ configured: boolean }>('/settings/github-token', {
