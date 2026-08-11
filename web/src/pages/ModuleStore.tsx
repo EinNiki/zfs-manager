@@ -617,7 +617,7 @@ export default function ModuleStore() {
               <input
                 className="input"
                 style={{ flex: 1 }}
-                placeholder="github.com/example/repo or example.com/registry/index.json"
+                placeholder="https://github.com/example/repo or https://example.com/registry/index.json"
                 value={newRegistryUrl}
                 onChange={e => setNewRegistryUrl(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addRegistry()}
