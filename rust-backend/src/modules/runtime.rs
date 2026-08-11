@@ -57,6 +57,9 @@ pub struct ModuleCtx {
     pub secrets: HashMap<String, String>,
     pub pg: Option<Arc<Client>>,
     pub config_json: String,
+    /// Internal auth token injected into all module HTTP requests so the
+    /// dashboard's own auth middleware can recognize and allow them.
+    pub internal_token: String,
 }
 
 /// What the host records after a run.
@@ -118,6 +121,11 @@ impl HostState {
         net::reject_dangerous_ip(&parsed).await?;
 
         let mut request = self.http.request(method, parsed);
+        // Inject internal auth token so the dashboard's own auth middleware
+        // recognizes requests from the WASM sandbox and allows them through.
+        // This lets modules call dashboard API endpoints (e.g. /api/v1/disks)
+        // without needing a user-provided API key or session token.
+        request = request.header("X-Internal-Module", &self.ctx.internal_token);
         for (name, value) in headers {
             request = request.header(name.as_str(), value.as_str());
         }

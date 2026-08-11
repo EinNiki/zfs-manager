@@ -53,4 +53,8 @@ pub struct AppState {
     pub io_cache: Arc<tokio::sync::RwLock<CachedIoSnapshot>>,
     /// Per-disk running byte totals used for the "Total Read / Total Write" columns.
     pub disk_cumulative: DiskCumulative,
+    /// Random token injected into all module HTTP requests so the auth
+    /// middleware can recognize internal requests from the WASM sandbox
+    /// and bypass session/API-key auth. Generated once at startup.
+    pub internal_module_token: Arc<String>,
 }

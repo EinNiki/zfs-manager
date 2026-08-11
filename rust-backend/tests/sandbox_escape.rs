@@ -25,6 +25,7 @@ fn ctx(attack: &str) -> ModuleCtx {
         secrets: HashMap::new(),
         pg: None,
         config_json: format!(r#"{{"attack":"{attack}"}}"#),
+        internal_token: "test-token".into(),
     }
 }
 

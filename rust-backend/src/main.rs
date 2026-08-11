@@ -59,6 +59,17 @@ async fn auth_middleware(
         return Ok(next.run(req).await);
     }
 
+    // Internal requests from the WASM module sandbox carry a random token
+    // injected by the runtime. This lets modules call dashboard API endpoints
+    // (e.g. /api/v1/disks) without needing a user-provided API key.
+    if let Some(internal) = req.headers().get("x-internal-module") {
+        if let Ok(internal_str) = internal.to_str() {
+            if internal_str == state.internal_module_token.as_str() {
+                return Ok(next.run(req).await);
+            }
+        }
+    }
+
     let token_opt = req.headers()
         .get("x-api-key")
         .or_else(|| req.headers().get("Authorization"))
@@ -416,6 +427,14 @@ async fn main() {
         routes::settings::init_accent_color_cache(pg).await;
     }
 
+    // Generate a random internal token for WASM module → dashboard API auth.
+    // This token is injected into every HTTP request made by a running module
+    // and recognized by the auth middleware to bypass session/API-key checks.
+    let internal_module_token: String = {
+        use rand::Rng;
+        (0..64).map(|_| rand::thread_rng().sample(rand::distributions::Alphanumeric) as char).collect()
+    };
+
     let app_state = AppState {
         redis: redis_conn,
         pg: pg_client,
@@ -426,6 +445,7 @@ async fn main() {
         total_write_bytes: Arc::new(AtomicU64::new(init_write)),
         io_cache: Arc::new(tokio::sync::RwLock::new(state::CachedIoSnapshot::default())),
         disk_cumulative: Arc::new(tokio::sync::RwLock::new(init_disk_cumulative)),
+        internal_module_token: Arc::new(internal_module_token),
     };
 
     // Startup: warm Redis from PostgreSQL before worker loops

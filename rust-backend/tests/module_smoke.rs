@@ -22,6 +22,7 @@ fn ctx(secrets: HashMap<String, String>) -> ModuleCtx {
         secrets,
         pg: None,
         config_json: r#"{"immich_url":"http://immich.invalid:2283","stats_to_fetch":["photos"]}"#.into(),
+        internal_token: "test-token".into(),
     }
 }
 

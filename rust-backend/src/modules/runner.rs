@@ -95,6 +95,7 @@ pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) ->
         secrets: secret_values,
         pg: Some(pg.clone()),
         config_json: config.to_string(),
+        internal_token: state.internal_module_token.as_ref().clone(),
     };
     let outcome = runtime.run(&wasm, ctx, &RunLimits::default()).await;
 
