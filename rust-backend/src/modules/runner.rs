@@ -102,6 +102,61 @@ pub async fn execute_module(state: &AppState, module_id: &str, trigger: &str) ->
     debug!("module {module_id}: allowlist = {:?}", allowlist);
     debug!("module {module_id}: config = {}", config);
 
+    // Validate required config fields before running the module.
+    // Checks both the public config and the decrypted secrets.
+    let mut missing: Vec<String> = Vec::new();
+    for field in &manifest.config_schema {
+        if !field.required { continue; }
+        let is_secret = field.field_type == "secret";
+        let value = if is_secret {
+            // Secrets are not in the config JSON — check the decrypted map
+            secret_values.get(&field.key).map(|s| s.trim().to_string()).unwrap_or_default()
+        } else {
+            config.get(&field.key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        };
+        if value.is_empty() {
+            missing.push(field.label.clone());
+        }
+    }
+    if !missing.is_empty() {
+        let msg = format!(
+            "Required configuration fields are empty: {}. \
+             Please fill them in the module settings before running.",
+            missing.join(", ")
+        );
+        warn!("module {module_id}: run blocked — missing required fields: {:?}", missing);
+        // Record a failed run in the DB so the user sees it in the history
+        let run_id: i64 = pg
+            .query_one(
+                "INSERT INTO module_runs(module_id, trigger) VALUES($1, $2) RETURNING id",
+                &[&module_id, &trigger],
+            )
+            .await
+            .map_err(|e| e.to_string())?
+            .get(0);
+        // Mark the run as finished with the error
+        if let Err(e) = pg
+            .execute(
+                "UPDATE module_runs SET finished_at = NOW(), success = FALSE, message = $1, metrics_written = 0 WHERE id = $2",
+                &[&msg, &run_id],
+            )
+            .await
+        {
+            warn!("module {module_id}: failed to record blocked run {run_id}: {e}");
+        }
+        let outcome = RunOutcome {
+            success: false,
+            message: String::new(),
+            metrics_written: 0,
+            error: Some(msg.clone()),
+            logs: vec![format!("[warn] {msg}")],
+        };
+        return Ok((run_id, outcome));
+    }
+
     // Load WASM bytes. Primary source: PostgreSQL (survives container restarts).
     // Fallback: disk file at /app/modules/<id>.wasm (for backward compat).
     let wasm: Vec<u8> = {

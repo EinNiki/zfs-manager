@@ -39,6 +39,30 @@ export default function ModuleConfigForm({ module, onSave }: Props) {
   const setValue = (key: string, value: unknown) => setConfig(c => ({ ...c, [key]: value }));
 
   const save = async () => {
+    // Validate required fields before saving
+    const missing: string[] = [];
+    for (const field of module.config_schema) {
+      if (!field.required) continue;
+      if (field.type === 'secret') {
+        // Secrets: check if already configured (from backend) or just typed
+        const typed = secretInputs[field.key]?.trim();
+        const existing = (module as any)._secretConfigured?.[field.key];
+        if (!typed && !existing) {
+          missing.push(field.label);
+        }
+      } else {
+        const val = config[field.key];
+        const strVal = typeof val === 'string' ? val.trim() : String(val ?? '').trim();
+        if (!strVal) {
+          missing.push(field.label);
+        }
+      }
+    }
+    if (missing.length > 0) {
+      alert(`Please fill in all required fields:\n\n${missing.join('\n')}`);
+      return;
+    }
+
     setSaving(true);
     try {
       // 1. Save module config + secrets
