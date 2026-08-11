@@ -390,8 +390,15 @@ async fn main() {
             Some(key)
         }
         Err(e) => {
-            warn!("Secrets master key unavailable: {e} — module secrets disabled");
-            None
+            // This should never happen now — load_master_key has a fallback
+            // to an ephemeral in-memory key. But if it somehow does, don't
+            // disable secrets (which causes 500s on save); generate an
+            // ephemeral key instead.
+            warn!("load_master_key returned error: {e} — generating ephemeral key");
+            let mut key = [0u8; 32];
+            use rand::RngCore;
+            rand::rngs::OsRng.fill_bytes(&mut key);
+            Some(key)
         }
     };
     if let Some(ref pg) = pg_client {

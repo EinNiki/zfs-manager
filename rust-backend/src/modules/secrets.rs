@@ -10,7 +10,8 @@ const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
 
 /// Loads the AES-256 master key: `ZFS_SECRETS_MASTER_KEY` (base64, 32 bytes)
-/// wins; otherwise a key is generated once and persisted in the data dir.
+/// wins; otherwise a key is generated once and persisted in a writable data dir.
+/// Tries multiple locations so it works in containers, VMs, and bare-metal.
 pub fn load_master_key() -> Result<[u8; KEY_LEN], String> {
     if let Ok(b64) = std::env::var("ZFS_SECRETS_MASTER_KEY") {
         let bytes = base64::engine::general_purpose::STANDARD
@@ -21,16 +22,59 @@ pub fn load_master_key() -> Result<[u8; KEY_LEN], String> {
             .map_err(|_| "ZFS_SECRETS_MASTER_KEY must decode to exactly 32 bytes".to_string());
     }
 
-    let key_path = format!("{}/secrets.key", crate::startup::data_dir());
-    match std::fs::read(&key_path) {
-        Ok(bytes) => bytes
-            .try_into()
-            .map_err(|_| format!("{key_path} is corrupt (expected 32 bytes)")),
-        Err(_) => {
-            let mut key = [0u8; KEY_LEN];
-            OsRng.fill_bytes(&mut key);
-            write_owner_only(&key_path, &key).map_err(|e| format!("cannot write {key_path}: {e}"))?;
-            warn!("ZFS_SECRETS_MASTER_KEY not set — generated a key at {key_path}. Set the env var for proper secret management.");
+    // Try a list of candidate paths — first one that works wins.
+    let data_dir = crate::startup::data_dir();
+    let candidates = [
+        format!("{data_dir}/secrets.key"),
+        "/var/lib/zfs-dashboard/secrets.key".to_string(),
+        "/tmp/zfs-dashboard-secrets.key".to_string(),
+    ];
+
+    // Phase 1: try to read an existing key from any candidate path.
+    for key_path in &candidates {
+        if let Ok(bytes) = std::fs::read(key_path) {
+            if bytes.len() == KEY_LEN {
+                let key: [u8; KEY_LEN] = bytes
+                    .try_into()
+                    .map_err(|_| format!("{key_path} is corrupt (expected {KEY_LEN} bytes)"))?;
+                info!("Secrets master key loaded from {key_path}");
+                return Ok(key);
+            }
+            warn!("Secrets key at {key_path} is corrupt ({} bytes, expected {KEY_LEN}) — ignoring", bytes.len());
+        }
+    }
+
+    // Phase 2: no existing key found — generate one and persist it to the
+    // first writable location.
+    let mut key = [0u8; KEY_LEN];
+    OsRng.fill_bytes(&mut key);
+
+    let mut saved_to: Option<String> = None;
+    for key_path in &candidates {
+        // Ensure parent dir exists
+        if let Some(parent) = std::path::Path::new(key_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match write_owner_only(key_path, &key) {
+            Ok(()) => {
+                saved_to = Some(key_path.clone());
+                break;
+            }
+            Err(e) => {
+                warn!("Cannot write secrets key to {key_path}: {e} — trying next location");
+            }
+        }
+    }
+
+    match &saved_to {
+        Some(path) => {
+            warn!("ZFS_SECRETS_MASTER_KEY not set — generated a new key at {path}. Set the env var for stable secret management across restarts.");
+            Ok(key)
+        }
+        None => {
+            // Last resort: use an in-memory key. Secrets won't survive a restart,
+            // but at least saving config works instead of crashing with 500.
+            warn!("Cannot persist secrets key anywhere — using an ephemeral in-memory key. Secrets will be lost on restart. Set ZFS_SECRETS_MASTER_KEY env var or fix filesystem permissions.");
             Ok(key)
         }
     }
