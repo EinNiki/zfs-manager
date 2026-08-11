@@ -142,6 +142,15 @@ export const api = {
       body: JSON.stringify({ current_password, new_password, confirm_password }),
     }),
 
+  getGithubInterval: () =>
+    request<{ hours: number }>('/settings/github-interval'),
+
+  setGithubInterval: (hours: number) =>
+    request<{ hours: number }>('/settings/github-interval', {
+      method: 'PUT',
+      body: JSON.stringify({ hours }),
+    }),
+
   // ── Per-module database settings ───────────────────────────────────────────
   getModuleDatabase: (id: string) =>
     request<ModuleDbSettings>(`/modules/${encodeURIComponent(id)}/database`),

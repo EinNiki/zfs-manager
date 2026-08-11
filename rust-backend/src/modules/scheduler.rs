@@ -7,26 +7,63 @@ use super::runner::{execute_module, is_due, parse_schedule};
 use crate::state::AppState;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-const GITHUB_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+const DEFAULT_GITHUB_REFRESH_HOURS: u64 = 6;
+
+/// Reads the configured GitHub update interval from app_settings.
+/// Returns hours. Default: 6. Minimum: 1. Maximum: 168 (1 week).
+async fn get_github_refresh_interval_hours(state: &AppState) -> u64 {
+    if let Some(pg) = state.pg.as_ref() {
+        if let Ok(row) = pg
+            .query_opt(
+                "SELECT value FROM app_settings WHERE key = 'github_update_interval_hours'",
+                &[],
+            )
+            .await
+        {
+            if let Some(row) = row {
+                let val: Value = row.get(0);
+                if let Some(n) = val.as_u64() {
+                    return n.clamp(1, 168);
+                }
+                if let Some(n) = val.as_f64() {
+                    return (n as u64).clamp(1, 168);
+                }
+            }
+        }
+    }
+    DEFAULT_GITHUB_REFRESH_HOURS
+}
 
 /// Polls active module configs and triggers due runs. DB state is the single
 /// source of truth, so config changes take effect on the next tick without
 /// any registration bookkeeping.
 ///
-/// Also refreshes the GitHub release cache every 6 hours so the Store and
-/// Sidebar version checks never hit the GitHub API rate limit.
+/// Also refreshes the GitHub release cache periodically (configurable in
+/// Settings → Security). The interval is re-read from the DB every tick
+/// so changes take effect without restart.
 pub async fn run_module_scheduler(state: AppState) {
     info!("Module scheduler started (tick {}s)", POLL_INTERVAL.as_secs());
     let mut last_github_refresh: Option<Instant> = None;
+    let mut current_interval_secs: u64 = DEFAULT_GITHUB_REFRESH_HOURS * 3600;
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
         if let Err(e) = tick(&state).await {
             warn!("Module scheduler tick failed: {e}");
         }
 
-        // Refresh GitHub cache every 6 hours
+        // Re-read interval from DB every tick (cheap query, every 30s)
+        let new_hours = get_github_refresh_interval_hours(&state).await;
+        let new_secs = new_hours * 3600;
+        if new_secs != current_interval_secs {
+            info!("GitHub refresh interval changed: {}h → {}h", current_interval_secs / 3600, new_hours);
+            current_interval_secs = new_secs;
+            // Force refresh on next check by resetting last_github_refresh
+            last_github_refresh = None;
+        }
+
+        // Refresh GitHub cache if interval has elapsed
         let should_refresh = last_github_refresh
-            .map(|t| t.elapsed() >= GITHUB_REFRESH_INTERVAL)
+            .map(|t| t.elapsed().as_secs() >= current_interval_secs)
             .unwrap_or(true);
         if should_refresh {
             last_github_refresh = Some(Instant::now());

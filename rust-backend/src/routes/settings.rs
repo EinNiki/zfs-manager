@@ -16,6 +16,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/settings/api-keys",     get(list_api_keys).post(create_api_key))
         .route("/api/v1/settings/api-keys/:id", delete(revoke_api_key))
         .route("/api/v1/settings/password",     post(change_password))
+        .route("/api/v1/settings/github-interval", get(get_github_interval).put(set_github_interval))
         .with_state(state)
 }
 
@@ -197,3 +198,47 @@ async fn change_password(
     Ok(Json(json!({ "ok": true })))
 }
 
+// ── GitHub update interval ──────────────────────────────────────────────────
+
+/// GET /api/v1/settings/github-interval
+/// Returns the configured GitHub API refresh interval in hours.
+async fn get_github_interval(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let pg = state.pg.as_ref().ok_or_else(|| ApiError::InternalError("Database unavailable".into()))?;
+    let row = pg
+        .query_opt("SELECT value FROM app_settings WHERE key = 'github_update_interval_hours'", &[])
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+    let hours: u64 = row
+        .and_then(|r| r.get::<_, Value>(0).as_u64())
+        .unwrap_or(6) // default
+        .clamp(1, 168);
+
+    Ok(Json(json!({ "hours": hours })))
+}
+
+#[derive(Deserialize)]
+struct SetGithubIntervalBody {
+    hours: u64,
+}
+
+/// PUT /api/v1/settings/github-interval
+/// Sets the GitHub API refresh interval (1-168 hours).
+async fn set_github_interval(
+    State(state): State<AppState>,
+    Json(body): Json<SetGithubIntervalBody>,
+) -> Result<Json<Value>, ApiError> {
+    let hours = body.hours.clamp(1, 168);
+    let pg = state.pg.as_ref().ok_or_else(|| ApiError::InternalError("Database unavailable".into()))?;
+    pg.execute(
+        "INSERT INTO app_settings(key, value, updated_at) VALUES('github_update_interval_hours', $1, NOW()) \
+         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+        &[&serde_json::json!(hours)],
+    )
+    .await
+    .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+    Ok(Json(json!({ "hours": hours })))
+}

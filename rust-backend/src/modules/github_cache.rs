@@ -67,7 +67,9 @@ pub fn parse_github_repo(url: &str) -> Option<(String, String)> {
 }
 
 /// Fetches the latest release tag_name for a GitHub repo.
-/// Checks Redis cache first; on miss, calls GitHub API and caches the result.
+/// CACHE-ONLY: reads from Redis or in-memory cache. Never calls GitHub API
+/// directly — the background scheduler populates the cache periodically.
+/// Returns empty string if not cached.
 pub async fn get_latest_release(
     redis: &Option<redis::aio::ConnectionManager>,
     repository_url: &str,
@@ -84,7 +86,6 @@ pub async fn get_latest_release(
         let mut c = conn.clone();
         if let Ok(val) = c.get::<_, Option<String>>(&rkey).await {
             if let Some(v) = val {
-                debug!("github_cache: Redis hit for {rkey}");
                 return v;
             }
         }
@@ -92,49 +93,16 @@ pub async fn get_latest_release(
 
     // 2. Check in-memory fallback
     if let Some(v) = mem_fresh(&mkey) {
-        debug!("github_cache: mem-cache hit for {mkey}");
         return v;
     }
 
-    // 3. Fetch from GitHub API
-    let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
-    let client = match reqwest::Client::builder()
-        .user_agent("ZFS-Dashboard")
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-
-    match client.get(&api_url).send().await {
-        Ok(r) if r.status().is_success() => {
-            let json: Value = r.json().await.unwrap_or(json!({}));
-            let tag = json
-                .get("tag_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            // Cache in Redis + memory
-            if let Some(ref conn) = redis {
-                let mut c = conn.clone();
-                let _: redis::RedisResult<()> =
-                    c.set_ex(&rkey, &tag, CACHE_TTL).await;
-            }
-            mem_set(&mkey, &tag);
-            debug!("github_cache: fetched and cached latest release for {owner}/{repo}: {tag}");
-            tag
-        }
-        _ => {
-            warn!("github_cache: failed to fetch latest release for {owner}/{repo}");
-            String::new()
-        }
-    }
+    // Not cached — return empty. The scheduler will populate it.
+    String::new()
 }
 
 /// Fetches all releases for a GitHub repo (for the version picker).
-/// Checks Redis cache first; on miss, calls GitHub API and caches the result.
+/// CACHE-ONLY: reads from Redis or in-memory cache. Never calls GitHub API
+/// directly — the background scheduler populates the cache periodically.
 /// Returns a Vec of release objects with tag_name, name, published_at, wasm_url.
 pub async fn get_all_releases(
     redis: &Option<redis::aio::ConnectionManager>,
@@ -153,7 +121,6 @@ pub async fn get_all_releases(
         if let Ok(val) = c.get::<_, Option<String>>(&rkey).await {
             if let Some(v) = val {
                 if let Ok(arr) = serde_json::from_str::<Vec<Value>>(&v) {
-                    debug!("github_cache: Redis hit for {rkey}");
                     return arr;
                 }
             }
@@ -163,74 +130,12 @@ pub async fn get_all_releases(
     // 2. Check in-memory fallback
     if let Some(v) = mem_fresh(&mkey) {
         if let Ok(arr) = serde_json::from_str::<Vec<Value>>(&v) {
-            debug!("github_cache: mem-cache hit for {mkey}");
             return arr;
         }
     }
 
-    // 3. Fetch from GitHub API
-    let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases");
-    let client = match reqwest::Client::builder()
-        .user_agent("ZFS-Dashboard")
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    match client.get(&api_url).send().await {
-        Ok(r) if r.status().is_success() => {
-            let releases_raw: Vec<Value> = r.json().await.unwrap_or_default();
-
-            // Extract only the fields we need
-            let releases: Vec<Value> = releases_raw
-                .iter()
-                .filter_map(|r| {
-                    let tag_name = r.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
-                    if tag_name.is_empty() {
-                        return None;
-                    }
-                    let name = r.get("name").and_then(|v| v.as_str()).unwrap_or(tag_name);
-                    let published_at = r.get("published_at").and_then(|v| v.as_str()).unwrap_or("");
-                    let assets = r.get("assets").and_then(|v| v.as_array());
-                    let wasm_asset = assets.and_then(|arr| {
-                        arr.iter().find(|a| {
-                            a.get("name")
-                                .and_then(|n| n.as_str())
-                                .map(|n| n.ends_with(".wasm"))
-                                .unwrap_or(false)
-                        })
-                    });
-                    let wasm_url = wasm_asset
-                        .and_then(|a| a.get("browser_download_url"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    Some(json!({
-                        "tag_name": tag_name,
-                        "name": name,
-                        "published_at": published_at,
-                        "wasm_url": wasm_url,
-                    }))
-                })
-                .collect();
-
-            // Cache in Redis + memory
-            let serialized = serde_json::to_string(&releases).unwrap_or_default();
-            if let Some(ref conn) = redis {
-                let mut c = conn.clone();
-                let _: redis::RedisResult<()> =
-                    c.set_ex(&rkey, &serialized, CACHE_TTL).await;
-            }
-            mem_set(&mkey, &serialized);
-            debug!("github_cache: fetched and cached {} releases for {owner}/{repo}", releases.len());
-            releases
-        }
-        _ => {
-            warn!("github_cache: failed to fetch releases for {owner}/{repo}");
-            Vec::new()
-        }
-    }
+    // Not cached — return empty. The scheduler will populate it.
+    Vec::new()
 }
 
 /// Invalidates all cached GitHub data (both Redis and in-memory).
@@ -268,15 +173,106 @@ pub async fn invalidate_all(redis: &Option<redis::aio::ConnectionManager>) {
 }
 
 /// Pre-warms the cache for a list of repository URLs.
-/// Called by the background scheduler every 6 hours.
+/// Called by the background scheduler periodically.
+/// This is the ONLY place that calls the GitHub API — all other code
+/// paths read from cache only.
+/// Re-indexes ALL releases from scratch (not incremental) so deleted
+/// releases are removed from the cache.
 pub async fn refresh_all(
     redis: &Option<redis::aio::ConnectionManager>,
     repo_urls: &[String],
 ) {
+    let client = match reqwest::Client::builder()
+        .user_agent("ZFS-Dashboard")
+        .timeout(Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("github_cache: failed to build HTTP client: {e}");
+            return;
+        }
+    };
+
     for url in repo_urls {
-        // Fetch both latest and all releases
-        get_latest_release(redis, url).await;
-        get_all_releases(redis, url).await;
+        let Some((owner, repo)) = parse_github_repo(url) else {
+            continue;
+        };
+
+        // 1. Fetch latest release
+        let latest_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+        match client.get(&latest_url).send().await {
+            Ok(r) if r.status().is_success() => {
+                let json: Value = r.json().await.unwrap_or(json!({}));
+                let tag = json
+                    .get("tag_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !tag.is_empty() {
+                    let rkey = redis_key_latest(&owner, &repo);
+                    let mkey = format!("latest:{owner}/{repo}");
+                    if let Some(ref conn) = redis {
+                        let mut c = conn.clone();
+                        let _: redis::RedisResult<()> =
+                            c.set_ex(&rkey, &tag, CACHE_TTL).await;
+                    }
+                    mem_set(&mkey, &tag);
+                    debug!("github_cache: refreshed latest release for {owner}/{repo}: {tag}");
+                }
+            }
+            _ => warn!("github_cache: failed to fetch latest release for {owner}/{repo}"),
+        }
+
+        // 2. Fetch ALL releases (full re-index, not incremental)
+        let releases_url = format!("https://api.github.com/repos/{owner}/{repo}/releases");
+        match client.get(&releases_url).send().await {
+            Ok(r) if r.status().is_success() => {
+                let releases_raw: Vec<Value> = r.json().await.unwrap_or_default();
+                let releases: Vec<Value> = releases_raw
+                    .iter()
+                    .filter_map(|r| {
+                        let tag_name = r.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
+                        if tag_name.is_empty() {
+                            return None;
+                        }
+                        let name = r.get("name").and_then(|v| v.as_str()).unwrap_or(tag_name);
+                        let published_at = r.get("published_at").and_then(|v| v.as_str()).unwrap_or("");
+                        let assets = r.get("assets").and_then(|v| v.as_array());
+                        let wasm_asset = assets.and_then(|arr| {
+                            arr.iter().find(|a| {
+                                a.get("name")
+                                    .and_then(|n| n.as_str())
+                                    .map(|n| n.ends_with(".wasm"))
+                                    .unwrap_or(false)
+                            })
+                        });
+                        let wasm_url = wasm_asset
+                            .and_then(|a| a.get("browser_download_url"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        Some(json!({
+                            "tag_name": tag_name,
+                            "name": name,
+                            "published_at": published_at,
+                            "wasm_url": wasm_url,
+                        }))
+                    })
+                    .collect();
+
+                let serialized = serde_json::to_string(&releases).unwrap_or_default();
+                let rkey = redis_key_releases(&owner, &repo);
+                let mkey = format!("releases:{owner}/{repo}");
+                if let Some(ref conn) = redis {
+                    let mut c = conn.clone();
+                    let _: redis::RedisResult<()> =
+                        c.set_ex(&rkey, &serialized, CACHE_TTL).await;
+                }
+                mem_set(&mkey, &serialized);
+                debug!("github_cache: refreshed {} releases for {owner}/{repo}", releases.len());
+            }
+            _ => warn!("github_cache: failed to fetch releases for {owner}/{repo}"),
+        }
     }
     debug!("github_cache: background refresh complete for {} repos", repo_urls.len());
 }

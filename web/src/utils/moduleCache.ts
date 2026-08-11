@@ -4,7 +4,7 @@ import { StoreModule, ActiveModule } from '../types';
 const STORE_CACHE_KEY = 'zfs_module_store_cache';
 const ACTIVE_CACHE_KEY = 'zfs_active_modules_cache';
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-const STORE_TTL_FOR_UPDATE_CHECK_MS = 2 * 60 * 1000; // 2 minutes — used by Active Modules for update checks
+const STORE_TTL_FOR_UPDATE_CHECK_MS = 30 * 1000; // 30 seconds — Active Modules reads from backend Redis cache
 
 interface CacheEntry<T> {
   timestamp: number;

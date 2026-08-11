@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { Key, Lock, Plus, Trash2, Eye, EyeOff, CheckCircle, XCircle, Copy, Monitor, Database, Shield, Zap, FolderPlus, RotateCcw, Edit2, Check, X, GripVertical } from 'lucide-react';
+import { Key, Lock, Plus, Trash2, Eye, EyeOff, CheckCircle, XCircle, Copy, Monitor, Database, Shield, Zap, FolderPlus, RotateCcw, Edit2, Check, X, GripVertical, RefreshCw } from 'lucide-react';
 import { api } from '../api';
 import PageTransition from './PageTransition';
 import ConfirmDialog from './ConfirmDialog';
@@ -630,6 +630,27 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
 
+  // GitHub update interval
+  const [githubHours, setGithubHours] = useState(6);
+  const [githubSaving, setGithubSaving] = useState(false);
+  const [githubSaved, setGithubSaved] = useState(false);
+
+  useEffect(() => {
+    api.getGithubInterval().then(r => setGithubHours(r.hours)).catch(() => {});
+  }, []);
+
+  const saveGithubInterval = async () => {
+    setGithubSaving(true);
+    setGithubSaved(false);
+    try {
+      const r = await api.setGithubInterval(githubHours);
+      setGithubHours(r.hours);
+      setGithubSaved(true);
+      setTimeout(() => setGithubSaved(false), 3000);
+    } catch { /* ignore */ }
+    finally { setGithubSaving(false); }
+  };
+
   const strength = (() => {
     if (next.length === 0) return null;
     if (next.length < 12)  return { label: 'Too short', color: 'var(--danger)', pct: 20 };
@@ -708,6 +729,48 @@ function SecurityTab({ onSuccess }: { onSuccess: () => void }) {
           </button>
         </div>
       </form>
+
+      {/* GitHub update interval */}
+      <div style={{ paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <RefreshCw size={16} style={{ color: 'var(--accent)' }} />
+          <div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+              Module Update Check
+            </div>
+            <div style={{ fontFamily: 'var(--font-ui)', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+              How often the background job fetches latest releases from GitHub for all modules.
+              Page loads never call GitHub — they read from cache only.
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <label style={labelStyle}>Every</label>
+          <input
+            type="number"
+            min={1}
+            max={168}
+            value={githubHours}
+            onChange={e => setGithubHours(Math.max(1, Math.min(168, parseInt(e.target.value, 10) || 6)))}
+            style={{ ...inputStyle, width: 80 }}
+          />
+          <span style={{ fontFamily: 'var(--font-ui)', fontSize: 13, color: 'var(--text-secondary)' }}>
+            hour{githubHours === 1 ? '' : 's'}
+          </span>
+          <button
+            onClick={saveGithubInterval}
+            disabled={githubSaving}
+            className="btn btn-primary"
+            style={{ height: 36, fontSize: 13, padding: '0 18px', opacity: githubSaving ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            {githubSaving ? 'Saving…' : githubSaved ? 'Saved!' : 'Save'}
+          </button>
+        </div>
+        <p style={{ fontFamily: 'var(--font-ui)', fontSize: 11, color: 'var(--text-muted)', margin: '8px 0 0', lineHeight: 1.4 }}>
+          Range: 1–168 hours. Lower values mean faster update detection but more GitHub API calls (rate limit: 60/hour unauthenticated).
+        </p>
+      </div>
     </div>
   );
 }
