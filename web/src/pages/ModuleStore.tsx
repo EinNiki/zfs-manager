@@ -6,7 +6,7 @@ import { StoreModule } from '../types';
 import PageTransition from '../components/PageTransition';
 import Modal from '../components/Modal';
 import { useNotifications } from '../context/NotificationContext';
-import { getModuleStoreCached, isUpdateAvailable, updateModuleStoreCache } from '../utils/moduleCache';
+import { getModuleStoreCached, isUpdateAvailable, updateModuleStoreCache, clearModuleCache } from '../utils/moduleCache';
 
 const cardStyle: React.CSSProperties = {
   background: 'var(--bg-surface)', border: '1px solid var(--border)',
@@ -267,6 +267,7 @@ export default function ModuleStore() {
         });
       }
       setSelectedModuleForVersionModal(null);
+      clearModuleCache();
       await reload();
     } catch (err) {
       notify({ type: 'error', title: 'Module Store', message: `Operation failed: ${(err as Error).message}` });
@@ -305,6 +306,7 @@ export default function ModuleStore() {
     } else {
       notify({ type: 'error', title: 'Module Store', message: 'All updates failed' });
     }
+    clearModuleCache();
     await reload();
   };
 

@@ -739,6 +739,10 @@ async fn switch_version(
     let actor = actor_from_headers(&state, &headers).await;
     audit(&state, &actor, "module_version_switched", Some(&id),
           json!({ "version": body.version, "wasm_url": body.wasm_url })).await;
+
+    // Invalidate store cache so the updated version shows up immediately
+    super::module_store::invalidate_store_cache_pub(&state).await;
+
     Ok(Json(json!({ "ok": true, "version": body.version })))
 }
 
