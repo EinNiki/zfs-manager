@@ -10,7 +10,7 @@ import ModuleConfigForm from '../components/ModuleConfigForm';
 import PageTransition from '../components/PageTransition';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useNotifications } from '../context/NotificationContext';
-import { getActiveModulesCached, getModuleStoreCached, isUpdateAvailable } from '../utils/moduleCache';
+import { getActiveModulesCached, getModuleStoreForUpdateCheck, isUpdateAvailable } from '../utils/moduleCache';
 
 const buttonStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -59,7 +59,7 @@ export default function ActiveModules() {
     try {
       const [activeRes, storeRes] = await Promise.all([
         getActiveModulesCached(forceRefresh),
-        getModuleStoreCached(forceRefresh),
+        getModuleStoreForUpdateCheck(forceRefresh),
       ]);
       setModules(activeRes.modules);
 

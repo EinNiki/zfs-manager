@@ -4,6 +4,7 @@ import { StoreModule, ActiveModule } from '../types';
 const STORE_CACHE_KEY = 'zfs_module_store_cache';
 const ACTIVE_CACHE_KEY = 'zfs_active_modules_cache';
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const STORE_TTL_FOR_UPDATE_CHECK_MS = 2 * 60 * 1000; // 2 minutes — used by Active Modules for update checks
 
 interface CacheEntry<T> {
   timestamp: number;
@@ -30,12 +31,22 @@ export function isUpdateAvailable(currentVersion?: string, latestVersion?: strin
 }
 
 export async function getModuleStoreCached(forceRefresh = false): Promise<{ modules: StoreModule[]; errors: Array<{ registry_url: string; error: string }> }> {
+  return getModuleStoreCachedWithTTL(forceRefresh, CACHE_TTL_MS);
+}
+
+/// Used by Active Modules page — shorter TTL so update-available badges
+/// show up quickly after a new release is published.
+export async function getModuleStoreForUpdateCheck(forceRefresh = false): Promise<{ modules: StoreModule[]; errors: Array<{ registry_url: string; error: string }> }> {
+  return getModuleStoreCachedWithTTL(forceRefresh, STORE_TTL_FOR_UPDATE_CHECK_MS);
+}
+
+async function getModuleStoreCachedWithTTL(forceRefresh: boolean, ttlMs: number): Promise<{ modules: StoreModule[]; errors: Array<{ registry_url: string; error: string }> }> {
   if (!forceRefresh) {
     try {
       const raw = localStorage.getItem(STORE_CACHE_KEY);
       if (raw) {
         const entry: CacheEntry<{ modules: StoreModule[]; errors: Array<{ registry_url: string; error: string }> }> = JSON.parse(raw);
-        if (Date.now() - entry.timestamp < CACHE_TTL_MS) {
+        if (Date.now() - entry.timestamp < ttlMs) {
           return entry.data;
         }
       }
