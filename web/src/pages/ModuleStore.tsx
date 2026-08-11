@@ -57,6 +57,7 @@ export default function ModuleStore() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [updatingAll, setUpdatingAll] = useState(false);
 
   // Version Picker Modal State
   const [selectedModuleForVersionModal, setSelectedModuleForVersionModal] = useState<StoreModule | null>(null);
@@ -258,6 +259,39 @@ export default function ModuleStore() {
     }
   };
 
+  const updateAll = async () => {
+    const toUpdate = modules.filter(m => m.installed && isUpdateAvailable(m.installed_version, m.version));
+    if (toUpdate.length === 0) return;
+    setUpdatingAll(true);
+    let successCount = 0;
+    let failCount = 0;
+    for (const mod of toUpdate) {
+      try {
+        // Fetch releases to get the wasm_url of the latest version
+        const res = await api.getModuleReleases(mod.repository_url);
+        const latest = res.releases.find(r => r.tag_name === mod.version) ?? res.releases[0];
+        if (!latest) { failCount++; continue; }
+        await api.switchModuleVersion(mod.id, latest.tag_name, latest.wasm_url);
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    setUpdatingAll(false);
+    if (successCount > 0) {
+      notify({
+        type: failCount > 0 ? 'error' : 'success',
+        title: 'Module Store',
+        message: failCount > 0
+          ? `${successCount} updated, ${failCount} failed`
+          : `${successCount} module${successCount === 1 ? '' : 's'} updated`,
+      });
+    } else {
+      notify({ type: 'error', title: 'Module Store', message: 'All updates failed' });
+    }
+    await reload();
+  };
+
   const confirmDuplicateSelections = async () => {
     setStoredRegistrySelections(selectedRegistryForMod);
 
@@ -453,6 +487,18 @@ export default function ModuleStore() {
             <button className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => reload(false, true)} disabled={loading} title="Cache leeren & Registries neu abfragen">
               <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
             </button>
+            {modules.filter(m => m.installed && isUpdateAvailable(m.installed_version, m.version)).length > 1 && (
+              <button
+                className="btn"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, borderColor: 'rgba(245, 158, 11, 0.4)', background: 'rgba(245, 158, 11, 0.1)', color: 'var(--warning)', opacity: updatingAll ? 0.6 : 1 }}
+                onClick={updateAll}
+                disabled={updatingAll}
+                title="Update all modules with available updates"
+              >
+                {updatingAll ? <Loader2 size={14} className="spin" /> : <ArrowUpCircle size={14} />}
+                {updatingAll ? 'Updating…' : `Update All (${modules.filter(m => m.installed && isUpdateAvailable(m.installed_version, m.version)).length})`}
+              </button>
+            )}
           </div>
         </div>
 
