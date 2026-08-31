@@ -27,8 +27,8 @@ hex = "0.4"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 cron = "0.12"
 refinery = { version = "=0.9.2", features = ["tokio-postgres"] }
-wasmtime = { version = "=47.0.3", default-features = false, features = ["component-model", "async", "runtime", "cranelift", "parallel-compilation"] }
+wasmtime = { version = "=47.0.4", default-features = false, features = ["component-model", "async", "runtime", "cranelift", "parallel-compilation"] }
 toml = "=1.1.4"
 aes-gcm = "=0.11.0"
 base64 = "=0.23.0"
-wasmtime-wasi = "=47.0.3"
+wasmtime-wasi = "=47.0.4"
