@@ -2342,6 +2342,12 @@ function SettingsPopout({
     setSaving(true);
     try {
       for (const [k, v] of changed) {
+        // Scrub schedule has no POOL_PROP_DEFS entry (rendered separately) —
+        // without this case the PUT was never sent and the user's schedule was lost.
+        if (k === 'zfsmanager:scrub_schedule') {
+          await api.setPoolSetting(poolName, 'dataset', k, v);
+          continue;
+        }
         const def = POOL_PROP_DEFS.find(d => d.name === k);
         if (def) await api.setPoolSetting(poolName, def.scope, k, v);
       }

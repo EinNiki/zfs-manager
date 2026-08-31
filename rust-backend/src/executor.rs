@@ -15,7 +15,10 @@ const ALLOWED_ZPOOL: &[&str] = &[
 ];
 
 fn validate_arg(arg: &str) -> Result<(), ApiError> {
-    if arg.contains([';', '&', '|', '`', '$', '(', ')', '{', '}', '<', '>', '\n', '\r', '\0']) {
+    // Note: `{`/`}` are allowed — values like the JSON scrub schedule
+    // (`zfsmanager:scrub_schedule={"enabled":true,...}`) must be passable, and
+    // args are passed via Command (no shell), so braces are not dangerous.
+    if arg.contains([';', '&', '|', '`', '$', '(', ')', '<', '>', '\n', '\r', '\0']) {
         return Err(ApiError::BadRequest("Invalid character in argument".into()));
     }
     if arg.contains("..") {

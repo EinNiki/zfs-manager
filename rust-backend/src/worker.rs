@@ -3,7 +3,7 @@ use redis::AsyncCommands;
 use tokio::time::{interval, Duration, Instant, MissedTickBehavior};
 use tracing::{info, warn};
 use cron::Schedule;
-use chrono::Utc;
+use chrono::Local;
 use std::str::FromStr;
 
 use crate::state::DiskMetric;
@@ -1006,7 +1006,9 @@ async fn run_scrub_scheduler_loop() {
     let mut ticker = interval(Duration::from_secs(60));
     loop {
         ticker.tick().await;
-        let now = Utc::now();
+        // Evaluate the cron schedule in the host's LOCAL timezone so presets
+        // like "Every Day @ 00:00" fire at local midnight, not UTC midnight.
+        let now = Local::now();
         let pools = get_pool_names().await;
         
         for pool in pools {
